@@ -164,8 +164,8 @@ CREATE TABLE supplier_products (
   brand               VARCHAR(128)    NULL,
   model               VARCHAR(512)    NULL,
   description         MEDIUMTEXT      NULL,
-  supplier_category   VARCHAR(512)    NULL,
-  supplier_category_path VARCHAR(1024) NULL,
+  supplier_category   VARCHAR(2048)   NULL,
+  supplier_category_path VARCHAR(2048) NULL,
   price               DECIMAL(12,4)   NULL,
   price_old           DECIMAL(12,4)   NULL,
   price_retail        DECIMAL(12,4)   NULL COMMENT 'MRC/RRC if separate from purchase price',
@@ -176,7 +176,7 @@ CREATE TABLE supplier_products (
   is_available        TINYINT(1)      NULL,
   product_url         VARCHAR(1024)   NULL,
   barcode             VARCHAR(64)     NULL,
-  manufacturer_code   VARCHAR(128)    NULL,
+  manufacturer_code   VARCHAR(255)    NULL,
   kit_description     TEXT            NULL COMMENT 'ViaSvet: what is included in set',
   attributes_json     JSON            NULL COMMENT 'all supplier-specific params',
   images_json         JSON            NULL COMMENT 'array of URLs or local paths from source',
@@ -306,7 +306,7 @@ CREATE TABLE product_supplier_links (
   id                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   product_id          BIGINT UNSIGNED NOT NULL,
   supplier_id         INT UNSIGNED    NOT NULL,
-  supplier_product_id BIGINT UNSIGNED NOT NULL,
+  supplier_product_id BIGINT UNSIGNED NULL COMMENT 'cleared, not cascaded, when the raw row is deleted',
   supplier_sku        VARCHAR(128)    NOT NULL,
   link_type           ENUM('primary', 'alternate', 'merged') NOT NULL DEFAULT 'alternate',
   is_active           TINYINT(1)      NOT NULL DEFAULT 1,
@@ -322,7 +322,7 @@ CREATE TABLE product_supplier_links (
     ON DELETE CASCADE ON UPDATE CASCADE,
   CONSTRAINT fk_product_supplier_links_supplier_product
     FOREIGN KEY (supplier_product_id) REFERENCES supplier_products(id)
-    ON DELETE CASCADE ON UPDATE CASCADE
+    ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE product_attributes (
