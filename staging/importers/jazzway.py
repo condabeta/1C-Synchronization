@@ -6,6 +6,7 @@ from typing import Any, Callable, Iterator
 import pandas as pd
 from pymysql.connections import Connection
 
+from staging.importers.jazzway_feed import JazzwayContent, order_code_for
 from staging.importers.common import (
     ImportStats,
     clean,
@@ -62,7 +63,17 @@ def _is_product_row(article: Any, price: Any) -> bool:
     return True
 
 
-def normalize_row(row: dict[str, Any], *, store_raw: bool = False) -> dict[str, Any] | None:
+def normalize_row(
+    row: dict[str, Any],
+    *,
+    content: JazzwayContent | None = None,
+    store_raw: bool = False,
+) -> dict[str, Any] | None:
+    """Normalize one price-file row, enriched with feed content when available.
+
+    The XLSX owns price and stock; the YML feed owns description, images, specs
+    and document links. Neither source alone is enough for a product card.
+    """
     if not _is_product_row(row.get("Артикул"), row.get("Цена клиента")):
         return None
 
@@ -72,14 +83,22 @@ def normalize_row(row: dict[str, Any], *, store_raw: bool = False) -> dict[str, 
 
     price = parse_decimal(row.get("Цена клиента"))
     stock = parse_decimal(row.get("Остаток"))
-    image_url = clean(row.get("Ссылка на картинку"))
-    images = [image_url] if image_url else []
+
+    images: list[str] = []
+    for image_url in [clean(row.get("Ссылка на картинку"))] + (content.images if content else []):
+        if image_url and image_url not in images:
+            images.append(image_url)
 
     attrs = {
         key: clean(row.get(key))
         for key in ATTR_COLUMNS
         if clean(row.get(key))
     }
+    if content:
+        # Price-file columns win on conflict; they are the ones the client sees.
+        attrs = {**content.attributes, **attrs}
+        if content.documents:
+            attrs["documents"] = content.documents
 
     is_available = 1
     if stock is not None:
@@ -90,16 +109,17 @@ def normalize_row(row: dict[str, Any], *, store_raw: bool = False) -> dict[str, 
         "supplier_sku_raw": sku,
         "name": clean(row.get("Номенклатура")),
         "brand": "Jazzway",
-        "manufacturer_code": sku.lstrip("."),
-        "supplier_category": None,
-        "supplier_category_path": None,
+        "manufacturer_code": (content.article if content else None) or sku.lstrip("."),
+        "description": content.description if content else None,
+        "supplier_category": content.category if content else None,
+        "supplier_category_path": content.category_path if content else None,
         "price": price,
         "price_retail": price,
         "price_old": parse_decimal(row.get("Цена.1")) or parse_decimal(row.get("Цена")),
         "stock_qty": stock,
         "is_available": is_available,
-        "product_url": clean(row.get("Ссылка на сайт")),
-        "barcode": None,
+        "product_url": clean(row.get("Ссылка на сайт")) or (content.product_url if content else None),
+        "barcode": content.barcode if content else None,
         "images_json": images,
         "attributes_json": attrs,
         "raw_data_json": dict(row) if store_raw else None,
@@ -108,6 +128,7 @@ def normalize_row(row: dict[str, Any], *, store_raw: bool = False) -> dict[str, 
         {
             "supplier_sku": sku,
             "name": normalized["name"],
+            "description": normalized["description"],
             "price": str(price) if price is not None else None,
             "stock_qty": str(stock) if stock is not None else None,
             "images_json": images,
@@ -116,6 +137,28 @@ def normalize_row(row: dict[str, Any], *, store_raw: bool = False) -> dict[str, 
         }
     )
     return normalized
+
+
+def content_for(
+    row: dict[str, Any],
+    feed_index: dict[str, JazzwayContent] | None,
+) -> JazzwayContent | None:
+    if not feed_index:
+        return None
+    return feed_index.get(order_code_for(clean(row.get("Артикул")) or ""))
+
+
+def _feed_coverage(df: "pd.DataFrame", feed_index: dict[str, JazzwayContent]) -> tuple[int, int]:
+    """(rows matched to the feed, priced rows in the file)."""
+    matched = priced = 0
+    for _, row in df.iterrows():
+        item = row.to_dict()
+        if not _is_product_row(item.get("Артикул"), item.get("Цена клиента")):
+            continue
+        priced += 1
+        if content_for(item, feed_index):
+            matched += 1
+    return matched, priced
 
 
 def iter_jazzway_rows(
@@ -157,6 +200,7 @@ def import_jazzway_xlsx(
     skip_rows: int = 0,
     progress: Callable[[str], None] | None = None,
     store_raw: bool = False,
+    feed_index: dict[str, JazzwayContent] | None = None,
 ) -> ImportStats:
     if not xlsx_path.exists():
         raise FileNotFoundError(f"Jazzway XLSX not found: {xlsx_path}")
@@ -180,12 +224,26 @@ def import_jazzway_xlsx(
 
     df = pd.read_excel(xlsx_path, header=HEADER_ROW)
 
+    if feed_index:
+        matched, priced = _feed_coverage(df, feed_index)
+        _report(
+            progress,
+            f"Feed matched {matched:,} of {priced:,} priced rows "
+            f"({priced - matched:,} will import without description or specs).",
+        )
+    else:
+        _report(progress, "No content feed - importing price and stock only.")
+
     try:
         for row_number, row in df.iterrows():
             stats.rows_total += 1
             try:
                 row_dict = row.to_dict()
-                normalized = normalize_row(row_dict, store_raw=store_raw)
+                normalized = normalize_row(
+                    row_dict,
+                    content=content_for(row_dict, feed_index),
+                    store_raw=store_raw,
+                )
                 if not normalized:
                     continue
 

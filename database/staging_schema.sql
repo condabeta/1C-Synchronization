@@ -90,6 +90,16 @@ JOIN (
          'D:\\projects\\1C\\Джазвея\\11.08 Остатки для клиента.xlsx', NULL, 5, 'Артикул', '0 8 * * *',
          JSON_OBJECT('import_filter', 'price_not_null') AS config_json
   UNION ALL
+  SELECT 'jazzway', 'content_yml', 'url', 'yml',
+         'https://www.jazz-way.com/bitrix/catalog_export/export_all.xml', NULL, NULL,
+         'Код для заказа', '0 8 * * *',
+         JSON_OBJECT(
+           'joins_to', 'stock_xlsx',
+           'join_key', 'Артикул without leading dot',
+           'provides', JSON_ARRAY('description', 'images', 'attributes', 'barcode', 'documents'),
+           'price_is_placeholder', TRUE
+         ) AS config_json
+  UNION ALL
   SELECT 'crystal', 'price_xls', 'file', 'xls',
          'D:\\projects\\1C\\crystal\\ПРАЙС LEDCRYSTAL от 05.08.2026.xls', NULL, 9, 'Артикул', NULL,
          JSON_OBJECT('images_from', 'parser:led-crystal.ru', 'stock_from', 'manual') AS config_json

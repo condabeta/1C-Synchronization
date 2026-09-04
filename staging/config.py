@@ -45,6 +45,11 @@ JAZZWAY_XLSX_DEFAULT = os.getenv(
     r"D:\projects\1C\Джазвея\11.08 Остатки для клиента.xlsx",
 )
 
+JAZZWAY_YML_URL = os.getenv(
+    "JAZZWAY_YML_URL",
+    "https://www.jazz-way.com/bitrix/catalog_export/export_all.xml",
+)
+
 VIASVET_XLSX_DEFAULT = os.getenv(
     "VIASVET_XLSX_PATH",
     r"D:\projects\1C\Виа Свет\ViaSvet_led_профиль_блоки_питания_лента_ПОСТУПЛЕНИЕ5.xlsx",

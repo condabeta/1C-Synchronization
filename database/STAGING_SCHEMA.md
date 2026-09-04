@@ -67,7 +67,11 @@ suppliers + supplier_sources
 | `param` | `attributes_json` |
 | `barcode` | `barcode` |
 
-### Jazzway (XLSX, header row 5)
+### Jazzway (XLSX price + YML content feed)
+
+Two sources, joined on import. Neither alone is enough for a product card.
+
+**Price XLSX** (header row 5, daily) — owns price and stock:
 
 | Source field | Column |
 |---|---|
@@ -79,6 +83,31 @@ suppliers + supplier_sources
 | `Ссылка на сайт` | `product_url` |
 
 Import filter: skip rows without `Цена клиента` (~2845 product rows).
+
+**Content YML** — `https://www.jazz-way.com/bitrix/catalog_export/export_all.xml`
+(public, no auth, ~11 MB, 2098 offers, regenerated nightly). Owns description,
+images, specs and document links:
+
+| Source field | Column |
+|---|---|
+| `param[Код для заказа]` | join key -> XLSX `Артикул` without its leading dot |
+| `description` | `description` (HTML) |
+| `picture`, `param[pictureN]` | `images_json` (~13 400 URLs, avg 6/offer) |
+| `param[*]` | `attributes_json` |
+| `param[Штрих-код]` | `barcode` |
+| `param[Артикул]` | `manufacturer_code` (the real Jazzway article) |
+| `param[Документация (…)]` | `attributes_json.documents`, keyed by kind |
+| `categoryId` -> `<categories>` | `supplier_category`, `supplier_category_path` |
+
+Caveats:
+
+- The feed has **no `vendorCode` and no `barcode` tag**; both live in `param`.
+- Every offer is `<price>1</price>` — placeholder. Price comes from the XLSX only.
+- Feed covers **1973 of 2845** priced rows; 872 import without description or specs.
+- 169 `pictureN` params are the bare domain used as a "no image" placeholder and
+  are filtered out.
+- `Документация (Сертификат)` holds ~5940 certificate PDF links — the only
+  machine-readable certificate source any supplier currently provides.
 
 ### LED Crystal (XLS, header row 9)
 

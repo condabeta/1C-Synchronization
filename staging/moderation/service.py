@@ -177,7 +177,42 @@ def _create_product_from_supplier(conn: Connection, row: dict[str, Any]) -> int:
             ),
         )
 
-        for index, image in enumerate(_parse_images(row.get("images_json"))):
+    _sync_product_images(conn, product_id, row["supplier_id"], _parse_images(row.get("images_json")))
+
+    _record_status(conn, product_id, None, "pending_moderation", "system", "Created from supplier import")
+    return product_id
+
+
+def _sync_product_images(
+    conn: Connection,
+    product_id: int,
+    supplier_id: int,
+    images: list[str],
+) -> int:
+    """Add images this supplier sends that the product does not have yet.
+
+    Existing rows are left alone, so a manually curated gallery keeps its order
+    and any image added by hand survives.
+    """
+    if not images:
+        return 0
+
+    known = {
+        row["source_path"]
+        for row in fetch_all(
+            conn,
+            "SELECT source_path FROM product_images WHERE product_id = %s",
+            (product_id,),
+        )
+    }
+    next_sort = len(known)
+    added = 0
+
+    with conn.cursor() as cur:
+        for image in images:
+            path = image[:1024]
+            if path in known:
+                continue
             source_type = "local_file" if re.match(r"^[A-Za-z]:\\", image) else "url"
             cur.execute(
                 """
@@ -187,16 +222,17 @@ def _create_product_from_supplier(conn: Connection, row: dict[str, Any]) -> int:
                 """,
                 (
                     product_id,
-                    row["supplier_id"],
-                    "main" if index == 0 else "gallery",
+                    supplier_id,
+                    "main" if not known else "gallery",
                     source_type,
-                    image[:1024],
-                    index,
+                    path,
+                    next_sort,
                 ),
             )
-
-    _record_status(conn, product_id, None, "pending_moderation", "system", "Created from supplier import")
-    return product_id
+            known.add(path)
+            next_sort += 1
+            added += 1
+    return added
 
 
 def _update_product_from_supplier(
@@ -205,15 +241,21 @@ def _update_product_from_supplier(
     supplier_id: int,
     supplier_data: dict[str, Any],
 ) -> None:
-    """Update product from supplier data respecting sync protection."""
+    """Update product from supplier data respecting sync protection.
+
+    A protected field is protected against being *overwritten*, not against being
+    filled in. If the product has no value yet there is no manual edit to lose,
+    so supplier content still lands - otherwise a supplier who starts sending
+    descriptions could never fill the ones already in the catalogue.
+    """
     # Build update SQL with only sync-enabled fields
     update_fields = []
     update_values = []
-    
+
     # Define field mappings from supplier_data to products table
     field_mappings = {
         "name": "name",
-        "brand": "brand", 
+        "brand": "brand",
         "description": "description",
         "price": "price",
         "price_old": "price_old",
@@ -221,12 +263,32 @@ def _update_product_from_supplier(
         "stock_qty": "stock_qty",
         "is_available": "is_available",
     }
-    
+
+    current = fetch_one(
+        conn,
+        f"SELECT {', '.join(sorted(set(field_mappings.values())))} FROM products WHERE id = %s",
+        (product_id,),
+    ) or {}
+
+    def _empty(value: Any) -> bool:
+        return value is None or (isinstance(value, str) and not value.strip())
+
     for supplier_field, product_field in field_mappings.items():
-        if supplier_field in supplier_data and should_sync_field(conn, supplier_id, supplier_field, product_id):
+        if supplier_field not in supplier_data:
+            continue
+        value = supplier_data[supplier_field]
+        allowed = should_sync_field(conn, supplier_id, supplier_field, product_id)
+        if not allowed:
+            # Fill-if-empty: nothing to protect when the product field is blank.
+            allowed = _empty(current.get(product_field)) and not _empty(value)
+        if allowed:
             update_fields.append(f"{product_field} = %s")
-            update_values.append(supplier_data[supplier_field])
-    
+            update_values.append(value)
+
+    _sync_product_images(
+        conn, product_id, supplier_id, _parse_images(supplier_data.get("images_json"))
+    )
+
     if not update_fields:
         return  # No fields to update
     
@@ -312,12 +374,16 @@ def enqueue_supplier_products(
 ) -> EnqueueStats:
     stats = EnqueueStats()
     params: list[Any] = []
-    where = ["sp.match_status = 'unmatched'"]
+    # Rows already matched to a product still need picking up when the supplier
+    # changed them - otherwise new descriptions and images never reach the
+    # catalogue, because matching happens once and never again.
+    if include_changed:
+        where = ["(sp.match_status = 'unmatched' OR sp.is_changed = 1)"]
+    else:
+        where = ["sp.match_status = 'unmatched'", "sp.is_new = 1"]
     if supplier_code:
         where.append("s.code = %s")
         params.append(supplier_code)
-    if not include_changed:
-        where.append("sp.is_new = 1")
 
     limit_sql = f"LIMIT {int(limit)}" if limit else ""
 
@@ -354,6 +420,7 @@ def enqueue_supplier_products(
                 "price_retail": row.get("price_retail"),
                 "stock_qty": row.get("stock_qty"),
                 "is_available": row.get("is_available"),
+                "images_json": row.get("images_json"),
             }
             _update_product_from_supplier(conn, product_id, row["supplier_id"], supplier_data)
             
