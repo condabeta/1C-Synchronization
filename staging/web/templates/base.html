@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Svetoyar Moderation{% endblock %}</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --card: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --accent: #2563eb;
+      --accent-soft: #dbeafe;
+      --ok: #059669;
+      --ok-soft: #d1fae5;
+      --bad: #dc2626;
+      --bad-soft: #fee2e2;
+      --border: #e5e7eb;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header {
+      background: #111827;
+      color: #fff;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    header a {
+      color: #cbd5e1;
+      text-decoration: none;
+      margin-left: 16px;
+    }
+    header a:hover { color: #fff; }
+    main {
+      max-width: 1200px;
+      margin: 24px auto;
+      padding: 0 16px 40px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 2px rgba(0,0,0,.04);
+    }
+    h1, h2, h3 { margin-top: 0; }
+    .muted { color: var(--muted); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+    }
+    .stat {
+      background: var(--accent-soft);
+      border-radius: 10px;
+      padding: 16px;
+    }
+    .stat .num {
+      font-size: 28px;
+      font-weight: 700;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      text-align: left;
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    th { color: var(--muted); font-size: 13px; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      background: #eef2ff;
+      color: #3730a3;
+    }
+    .badge.warn { background: #fef3c7; color: #92400e; }
+    .badge.ok { background: var(--ok-soft); color: var(--ok); }
+    .badge.bad { background: var(--bad-soft); color: var(--bad); }
+    .btn {
+      display: inline-block;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-size: 14px;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-ok { background: var(--ok); color: #fff; }
+    .btn-bad { background: var(--bad); color: #fff; }
+    .btn-secondary { background: #e5e7eb; color: #111827; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .filters {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    .filters a {
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: #e5e7eb;
+      color: #111827;
+      text-decoration: none;
+      font-size: 13px;
+    }
+    .filters a.active { background: var(--accent); color: #fff; }
+    .search-form {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-bottom: 16px;
+      padding: 12px;
+      background: #f9fafb;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+    .search-form input[type=text] {
+      flex: 1;
+      min-width: 200px;
+    }
+    .search-form select {
+      width: auto;
+      min-width: 150px;
+    }
+    .search-form button {
+      white-space: nowrap;
+    }
+    input[type=text], textarea, select {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font: inherit;
+    }
+    textarea { min-height: 90px; }
+    .images {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 10px;
+    }
+    .images img {
+      width: 100%;
+      height: 120px;
+      object-fit: cover;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #f9fafb;
+    }
+    .path-note {
+      font-size: 12px;
+      word-break: break-all;
+      color: var(--muted);
+    }
+    .pager { margin-top: 16px; display: flex; gap: 8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div><strong>Svetoyar</strong> · Moderation</div>
+    <nav>
+      <a href="{{ url_for('dashboard') }}">Dashboard</a>
+      <a href="{{ url_for('queue_list', status='pending') }}">Queue</a>
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

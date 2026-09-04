@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · Svetoyar{% endblock %}
+{% block content %}
+<h1>Moderation dashboard</h1>
+<p class="muted">Review supplier imports before 1C and site publish.</p>
+
+<div class="grid">
+  <div class="stat">
+    <div class="num">{{ stats.queue.pending or 0 }}</div>
+    <div>Pending review</div>
+  </div>
+  <div class="stat">
+    <div class="num">{{ stats.queue.approved or 0 }}</div>
+    <div>Approved</div>
+  </div>
+  <div class="stat">
+    <div class="num">{{ stats.queue.rejected or 0 }}</div>
+    <div>Rejected</div>
+  </div>
+  <div class="stat">
+    <div class="num">{{ stats.unmatched_supplier_products or 0 }}</div>
+    <div>Unmatched imports</div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Pending by supplier</h2>
+  {% if stats.pending_by_supplier %}
+  <table>
+    <thead><tr><th>Supplier</th><th>Pending</th></tr></thead>
+    <tbody>
+      {% for row in stats.pending_by_supplier %}
+      <tr>
+        <td>{{ row.supplier_name }} ({{ row.supplier_code }})</td>
+        <td><a href="{{ url_for('queue_list', status='pending', supplier=row.supplier_code) }}">{{ row.cnt }}</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No pending items yet. Enqueue products below.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Enqueue for moderation</h2>
+  <p class="muted">Start with smaller suppliers (viasvet, jazzway, crystal). Avoid dekomo --all.</p>
+  <form method="post" action="{{ url_for('enqueue_form') }}">
+    <p>
+      <label>Supplier code</label>
+      <select name="supplier">
+        <option value="">All (limited batch)</option>
+        <option value="viasvet">viasvet ({{ stats.unmatched_by_supplier.get('viasvet', 0) }} unmatched)</option>
+        <option value="jazzway">jazzway ({{ stats.unmatched_by_supplier.get('jazzway', 0) }} unmatched)</option>
+        <option value="crystal">crystal ({{ stats.unmatched_by_supplier.get('crystal', 0) }} unmatched)</option>
+        <option value="swg">swg ({{ stats.unmatched_by_supplier.get('swg', 0) }} unmatched)</option>
+        <option value="dekomo">dekomo ({{ stats.unmatched_by_supplier.get('dekomo', 0) }} unmatched)</option>
+      </select>
+    </p>
+    <p>
+      <label>Limit</label>
+      <input type="text" name="limit" value="50">
+    </p>
+    <button class="btn btn-primary" type="submit">Add to queue</button>
+  </form>
+</div>
+
+<div class="actions">
+  <a class="btn btn-primary" href="{{ url_for('queue_list', status='pending') }}">Open queue</a>
+</div>
+{% endblock %}

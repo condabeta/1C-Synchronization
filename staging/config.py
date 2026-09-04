@@ -1,0 +1,67 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ENV_FILE = PROJECT_ROOT / "config.env"
+
+if ENV_FILE.exists():
+    load_dotenv(ENV_FILE)
+else:
+    load_dotenv()
+
+
+@dataclass(frozen=True)
+class DatabaseConfig:
+    host: str
+    port: int
+    user: str
+    password: str
+    database: str
+
+    @classmethod
+    def from_env(cls) -> "DatabaseConfig":
+        return cls(
+            host=os.getenv("MYSQL_HOST", "127.0.0.1"),
+            port=int(os.getenv("MYSQL_PORT", "3306")),
+            user=os.getenv("MYSQL_USER", "root"),
+            password=os.getenv("MYSQL_PASSWORD", ""),
+            database=os.getenv("MYSQL_DATABASE", "svetoyar_staging"),
+        )
+
+
+DEKOMO_CSV_PATH = os.getenv(
+    "DEKOMO_CSV_PATH",
+    r"D:\projects\1C\Декомо\content_20_08_2026_22_51.xls",
+)
+DEKOMO_CSV_DEFAULT = DEKOMO_CSV_PATH
+
+JAZZWAY_XLSX_DEFAULT = os.getenv(
+    "JAZZWAY_XLSX_PATH",
+    r"D:\projects\1C\Джазвея\11.08 Остатки для клиента.xlsx",
+)
+
+VIASVET_XLSX_DEFAULT = os.getenv(
+    "VIASVET_XLSX_PATH",
+    r"D:\projects\1C\Виа Свет\ViaSvet_led_профиль_блоки_питания_лента_ПОСТУПЛЕНИЕ5.xlsx",
+)
+VIASVET_PHOTOS_DIR = os.getenv(
+    "VIASVET_PHOTOS_DIR",
+    r"D:\projects\1C\Виа Свет\на сайт",
+)
+
+CRYSTAL_XLS_DEFAULT = os.getenv(
+    "CRYSTAL_XLS_PATH",
+    r"D:\projects\1C\crystal\ПРАЙС LEDCRYSTAL от 05.08.2026.xls",
+)
+
+SWG_YML_URL = os.getenv(
+    "SWG_YML_URL",
+    "https://go.swg.ru/public_api/export/69d8c94368119bec81a1cc9f",
+)
+
+SCHEMA_FILE = PROJECT_ROOT / "database" / "staging_schema.sql"

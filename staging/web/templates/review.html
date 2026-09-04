@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Review #{{ item.id }} · Svetoyar{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('queue_list', status='pending') }}">← Back to queue</a></p>
+
+<h1>Review #{{ item.id }}</h1>
+<p>
+  <span class="badge warn">{{ item.queue_reason }}</span>
+  <span class="badge">{{ item.status }}</span>
+</p>
+
+<div class="card">
+  <h2>{{ item.product_name }}</h2>
+  <p><strong>Internal SKU:</strong> {{ item.internal_sku }}</p>
+  <p><strong>Supplier:</strong> {{ item.supplier_name }} ({{ item.supplier_code }})</p>
+  <p><strong>Supplier SKU:</strong> {{ item.supplier_sku }}</p>
+  <p><strong>Category:</strong> {{ item.supplier_category or '—' }}</p>
+  <p><strong>Price:</strong> {{ item.price or item.supplier_price or '—' }} · Retail: {{ item.price_retail or '—' }}</p>
+  <p><strong>Stock:</strong> {{ item.stock_qty if item.stock_qty is not none else '—' }}</p>
+  {% if item.product_url %}
+  <p><strong>URL:</strong> <a href="{{ item.product_url }}" target="_blank">{{ item.product_url }}</a></p>
+  {% endif %}
+  {% if item.description %}
+  <p><strong>Description:</strong><br>{{ item.description }}</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h3>Images</h3>
+  {% if item.product_images %}
+  <div class="images">
+    {% for img in item.product_images %}
+      {% if img.source_type == 'local_file' %}
+      <div>
+        <img src="{{ url_for('serve_local', path=img.source_path) }}" alt="product image">
+        <div class="path-note">{{ img.source_path }}</div>
+      </div>
+      {% else %}
+      <img src="{{ img.source_path }}" alt="product image">
+      {% endif %}
+    {% endfor %}
+  </div>
+  {% elif item.parsed_images_json %}
+  <div class="images">
+    {% for img in item.parsed_images_json %}
+      {% if img.startswith('http') %}
+      <img src="{{ img }}" alt="product image">
+      {% else %}
+      <div class="path-note">{{ img }}</div>
+      {% endif %}
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">No images.</p>
+  {% endif %}
+</div>
+
+{% if item.parsed_attributes %}
+<div class="card">
+  <h3>Attributes</h3>
+  <table>
+    {% for key, value in item.parsed_attributes.items() %}
+    <tr><th>{{ key }}</th><td>{{ value }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+{% if item.status in ['pending', 'in_review'] %}
+<div class="card">
+  <h3>Decision</h3>
+  <form method="post" action="{{ url_for('approve_item', queue_id=item.id) }}" style="margin-bottom:16px">
+    <p><label>Reviewer</label><input type="text" name="reviewer" value="moderator"></p>
+    <p><label>Notes</label><textarea name="notes" placeholder="Optional approval note"></textarea></p>
+    <button class="btn btn-ok" type="submit">Approve</button>
+  </form>
+  <form method="post" action="{{ url_for('reject_item', queue_id=item.id) }}">
+    <p><label>Reviewer</label><input type="text" name="reviewer" value="moderator"></p>
+    <p><label>Reject reason</label><textarea name="notes" placeholder="Why rejected"></textarea></p>
+    <button class="btn btn-bad" type="submit">Reject</button>
+  </form>
+</div>
+{% else %}
+<div class="card">
+  <p><strong>Reviewed by:</strong> {{ item.reviewer or '—' }}</p>
+  <p><strong>Notes:</strong> {{ item.review_notes or '—' }}</p>
+  <p><strong>Reviewed at:</strong> {{ item.reviewed_at or '—' }}</p>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Enqueued · Svetoyar{% endblock %}
+{% block content %}
+<h1>Queue updated</h1>
+<div class="card">
+  <p><strong>Supplier:</strong> {{ supplier }}</p>
+  <p><strong>Limit:</strong> {{ limit }}</p>
+  <p><strong>Scanned:</strong> {{ stats.scanned }}</p>
+  <p><strong>Products created:</strong> {{ stats.created_products }}</p>
+  <p><strong>Queued:</strong> {{ stats.queued }}</p>
+  <p><strong>Skipped:</strong> {{ stats.skipped }}</p>
+</div>
+<div class="actions">
+  <a class="btn btn-primary" href="{{ url_for('queue_list', status='pending') }}">Open queue</a>
+  <a class="btn btn-secondary" href="{{ url_for('dashboard') }}">Dashboard</a>
+</div>
+{% endblock %}

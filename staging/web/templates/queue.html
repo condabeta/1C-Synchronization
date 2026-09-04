@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+
+{% block title %}Queue · Svetoyar{% endblock %}
+
+{% block content %}
+
+<h1>Moderation queue</h1>
+
+<p class="muted">{{ total }} items · status: {{ status }}{% if supplier %} · supplier: {{ supplier }}{% endif %}</p>
+
+
+
+<div class="filters">
+
+  <a class="{% if status == 'pending' %}active{% endif %}" href="{{ url_for('queue_list', status='pending', supplier=supplier, search=search, reason=reason) }}">Pending</a>
+
+  <a class="{% if status == 'approved' %}active{% endif %}" href="{{ url_for('queue_list', status='approved', supplier=supplier, search=search, reason=reason) }}">Approved</a>
+
+  <a class="{% if status == 'rejected' %}active{% endif %}" href="{{ url_for('queue_list', status='rejected', supplier=supplier, search=search, reason=reason) }}">Rejected</a>
+
+</div>
+
+
+
+<form method="get" class="search-form">
+
+  <input type="text" name="search" placeholder="Search by name, SKU, supplier..." value="{{ search or '' }}">
+
+  <select name="supplier">
+
+    <option value="">All suppliers</option>
+
+    <option value="dekomo" {% if supplier == 'dekomo' %}selected{% endif %}>Dekomo</option>
+
+    <option value="swg" {% if supplier == 'swg' %}selected{% endif %}>SWG</option>
+
+    <option value="jazzway" {% if supplier == 'jazzway' %}selected{% endif %}>Jazzway</option>
+
+    <option value="crystal" {% if supplier == 'crystal' %}selected{% endif %}>Crystal</option>
+
+    <option value="viasvet" {% if supplier == 'viasvet' %}selected{% endif %}>ViaSvet</option>
+
+  </select>
+
+  <select name="reason">
+
+    <option value="">All reasons</option>
+
+    <option value="new_product" {% if reason == 'new_product' %}selected{% endif %}>New product</option>
+
+    <option value="major_change" {% if reason == 'major_change' %}selected{% endif %}>Major change</option>
+
+    <option value="missing_images" {% if reason == 'missing_images' %}selected{% endif %}>Missing images</option>
+
+    <option value="missing_description" {% if reason == 'missing_description' %}selected{% endif %}>Missing description</option>
+
+    <option value="price_anomaly" {% if reason == 'price_anomaly' %}selected{% endif %}>Price anomaly</option>
+
+    <option value="duplicate_suspect" {% if reason == 'duplicate_suspect' %}selected{% endif %}>Duplicate suspect</option>
+
+    <option value="manual" {% if reason == 'manual' %}selected{% endif %}>Manual</option>
+
+  </select>
+
+  <input type="hidden" name="status" value="{{ status }}">
+
+  <button type="submit">Search</button>
+
+  {% if search or supplier or reason %}
+
+  <a href="{{ url_for('queue_list', status=status) }}" class="btn btn-secondary">Clear</a>
+
+  {% endif %}
+
+</form>
+
+
+
+<div class="card">
+
+  <table>
+
+    <thead>
+
+      <tr>
+
+        <th>ID</th>
+
+        <th>Product</th>
+
+        <th>Supplier</th>
+
+        <th>Reason</th>
+
+        <th>Price</th>
+
+        <th>Created</th>
+
+        <th></th>
+
+      </tr>
+
+    </thead>
+
+    <tbody>
+
+      {% for item in items %}
+
+      <tr>
+
+        <td>#{{ item.id }}</td>
+
+        <td>
+
+          <strong>{{ item.product_name or item.internal_sku }}</strong><br>
+
+          <span class="muted">{{ item.internal_sku }}</span>
+
+        </td>
+
+        <td>{{ item.supplier_name or '—' }}<br><span class="muted">{{ item.supplier_sku }}</span></td>
+
+        <td><span class="badge warn">{{ item.queue_reason }}</span></td>
+
+        <td>{{ item.price or '—' }}</td>
+
+        <td>{{ item.created_at }}</td>
+
+        <td><a class="btn btn-secondary" href="{{ url_for('review_item', queue_id=item.id) }}">Review</a></td>
+
+      </tr>
+
+      {% else %}
+
+      <tr><td colspan="7" class="muted">Queue is empty.</td></tr>
+
+      {% endfor %}
+
+    </tbody>
+
+  </table>
+
+
+
+  {% if pages > 1 %}
+
+  <div class="pager">
+
+    {% if page > 1 %}
+
+    <a class="btn btn-secondary" href="{{ url_for('queue_list', status=status, supplier=supplier, search=search, reason=reason, page=page-1) }}">Prev</a>
+
+    {% endif %}
+
+    <span class="muted">Page {{ page }} / {{ pages }}</span>
+
+    {% if page < pages %}
+
+    <a class="btn btn-secondary" href="{{ url_for('queue_list', status=status, supplier=supplier, search=search, reason=reason, page=page+1) }}">Next</a>
+
+    {% endif %}
+
+  </div>
+
+  {% endif %}
+
+</div>
+
+{% endblock %}
+
