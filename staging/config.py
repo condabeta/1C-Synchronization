@@ -64,9 +64,8 @@ CRYSTAL_XLS_DEFAULT = os.getenv(
     r"D:\projects\1C\crystal\ПРАЙС LEDCRYSTAL от 05.08.2026.xls",
 )
 
-SWG_YML_URL = os.getenv(
-    "SWG_YML_URL",
-    "https://go.swg.ru/public_api/export/69d8c94368119bec81a1cc9f",
-)
+# SWG's export URL embeds a private token - anyone holding it can pull their
+# whole price feed. It lives in config.env (gitignored), never in the source.
+SWG_YML_URL = os.getenv("SWG_YML_URL", "")
 
 SCHEMA_FILE = PROJECT_ROOT / "database" / "staging_schema.sql"

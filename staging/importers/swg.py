@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from pymysql.connections import Connection
 
+from staging.config import SWG_YML_URL
 from staging.importers.common import (
     ImportStats,
     bytes_sha256,
@@ -25,7 +26,7 @@ from staging.importers.common import (
 
 SUPPLIER_CODE = "swg"
 SOURCE_CODE = "yml_export"
-DEFAULT_YML_URL = "https://go.swg.ru/public_api/export/69d8c94368119bec81a1cc9f"
+DEFAULT_YML_URL = SWG_YML_URL
 DEFAULT_YML_PATH = r"D:\projects\1C\SWG\yml.xml"
 BATCH_SIZE = 500
 

@@ -65,7 +65,7 @@ INSERT INTO suppliers (code, name, website, notes) VALUES
   ('dekomo',   'Декомо',       'https://www.dekomo.ru',   'CommerceML XML/CSV/XLS, ~150k SKU, full data'),
   ('swg',      'SWG Shop',     'https://swgshop.ru',      'YML URL export, ~3361 offers'),
   ('jazzway',  'Jazz-Way',     'https://jazz-way.com',    'Daily XLSX stock/price + image URLs'),
-  ('crystal',  'LED Crystal',  'https://led-crystal.ru',  'Manual XLS price, images/descriptions from site'),
+  ('crystal',  'LED Crystal',  'https://led-crystal.ru',  'Manual XLS price; site scraping permitted in writing 2026-09-05, source credit requested'),
   ('viasvet',  'ViaSvet',      'https://www.viasvet.ru',  'Multi-sheet XLSX + local photo folders, site allowed'),
   ('arlight',  'Arlight',      'https://arlight.ru',      'Pending supplier feed'),
   ('salux',    'STZ Salux',    'https://stz-salux.ru',    'Pending supplier feed, manual prices expected');
@@ -83,7 +83,7 @@ JOIN (
          'D:\\projects\\1C\\Декомо\\content_12_08_2026_12_11.xml', NULL, NULL, 'article', '0 6 * * *', NULL
   UNION ALL
   SELECT 'swg', 'yml_export', 'url', 'yml',
-         'https://go.swg.ru/public_api/export/69d8c94368119bec81a1cc9f', NULL, NULL, 'vendorCode', '0 7 * * *',
+         'SET_FROM_SWG_YML_URL', NULL, NULL, 'vendorCode', '0 7 * * *',
          JSON_OBJECT('images_fallback', 'website_parser') AS config_json
   UNION ALL
   SELECT 'jazzway', 'stock_xlsx', 'file', 'xlsx',
