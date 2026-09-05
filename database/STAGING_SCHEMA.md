@@ -109,16 +109,51 @@ Caveats:
 - `Документация (Сертификат)` holds ~5940 certificate PDF links — the only
   machine-readable certificate source any supplier currently provides.
 
-### LED Crystal (XLS, header row 9)
+### LED Crystal (XLS price + site scrape)
+
+**Price XLS** (header row 9, 9 sheets, manual):
 
 | Source field | Column |
 |---|---|
 | Col 1 `Артикул` (LR1-R) | `supplier_sku` |
-| Col 0 `Фото` | ignored (use parser) |
+| Col 0 `Фото` | ignored (use scraper) |
 | specs columns | `attributes_json` |
 | `Цена` | `price` |
 | — | `stock_qty` = NULL (manual) |
-| led-crystal.ru parser | `description`, `images_json` |
+
+**Site scrape** — `staging/importers/crystal_site.py`, run with
+`import_crystal.py --fetch-images`. Permission granted in writing 2026-09-05,
+source credit required (`suppliers.content_attribution`).
+
+The site is a uKit-style builder, not Bitrix: no `/search/`, no `/catalog/`
+tree. Everything hangs off `sitemap.xml` as flat slugs, so the scraper crawls it
+once (391 URLs, ~0.5 s apart) and answers lookups from memory.
+
+| Source | Column |
+|---|---|
+| `<link itemprop="contentUrl">` | `images_json` |
+| `og:description` | `description` |
+| `<title>` | article codes for matching |
+| page URL | `product_url` |
+
+Matching and filtering rules:
+
+- Product images are the only ones marked up as `schema.org/ImageObject`. Site
+  chrome (logo, two banners) repeats on every page and carries no `contentUrl`.
+- A page with no `contentUrl` is a category page — 35 of the 391.
+- Every page falls back to a site-wide blurb starting "Официальный сайт LED
+  CRYSTAL"; that is not a product description and is discarded.
+- Titles are latinized **before** tokenizing: the site types Cyrillic lookalikes
+  inside its own articles (`LC10S-ССT-01` has a Cyrillic `С`).
+- Articles match exactly first, then with punctuation stripped
+  (`LB114020--1-W` in the price list vs `LB114020-1-W` on the site). Both stages
+  compare whole codes — substring matching would hand `-1-W` the page for
+  `-1-WW`, a different colour temperature.
+- A code claimed by more than one page stays unmatched. A wrong photo is worse
+  than no photo.
+
+Coverage: **290 of 325 priced SKUs** matched, 527 images, 290 descriptions. The
+35 misses are mostly accessory kits (R39-01, R49-02, R53-04…) with no page.
 
 ### ViaSvet (multi-sheet XLSX + photo folders)
 

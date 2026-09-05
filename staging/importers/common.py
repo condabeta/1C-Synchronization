@@ -231,7 +231,10 @@ def upsert_product_batch(
             name = VALUES(name),
             brand = VALUES(brand),
             manufacturer_code = VALUES(manufacturer_code),
-            description = VALUES(description),
+            -- Never let a source that carries no content erase content another
+            -- source provided: the Crystal price XLS has no descriptions or
+            -- images, but the site scraper fills both in.
+            description = COALESCE(NULLIF(VALUES(description), ''), description),
             supplier_category = VALUES(supplier_category),
             supplier_category_path = VALUES(supplier_category_path),
             price = VALUES(price),
@@ -242,7 +245,10 @@ def upsert_product_batch(
             product_url = VALUES(product_url),
             barcode = VALUES(barcode),
             attributes_json = VALUES(attributes_json),
-            images_json = VALUES(images_json),
+            images_json = IF(
+                JSON_LENGTH(COALESCE(VALUES(images_json), JSON_ARRAY())) > 0,
+                VALUES(images_json), images_json
+            ),
             raw_data_json = VALUES(raw_data_json),
             content_hash = VALUES(content_hash),
             is_new = 0,
