@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -51,6 +52,76 @@ def _report(progress: Callable[[str], None] | None, message: str) -> None:
         print(message, flush=True)
 
 
+# Section headers of the price file: a row that carries an "Артикул" but no
+# "Номенклатура" and no price, e.g. ".  1.  Cветильники", "1.3.1. Трековые
+# системы однофазные", or a spaced-out block title like " С В Е Т".
+_SECTION_NUMBER_RE = re.compile(r"^[.\s]*((?:\d+\s*\.\s*)+)\s*(?P<title>.*\S)\s*$")
+
+
+class SectionTracker:
+    """Rebuilds the category path from the price file's own section rows.
+
+    The YML content feed carries categories too, but only for offers it matches,
+    and markup rules need a category for every priced row. The price file has
+    one for all of them - it just keeps it in header rows rather than a column.
+    """
+
+    def __init__(self) -> None:
+        self._path: list[str] = []
+
+    @staticmethod
+    def is_section_row(row: dict[str, Any]) -> bool:
+        if clean(row.get("Номенклатура")):
+            return False
+        title = clean(row.get("Артикул"))
+        if not title:
+            return False
+        return parse_decimal(row.get("Цена клиента")) is None
+
+    @staticmethod
+    def _parse(title: str) -> tuple[int, str]:
+        """(depth, clean title). Depth comes from the "1.3.1." style numbering."""
+        match = _SECTION_NUMBER_RE.match(title)
+        if match:
+            depth = len([part for part in match.group(1).split(".") if part.strip()])
+            text = " ".join(match.group("title").split())
+            # "1.14.1 Архитектурное освещение" - the last level of the numbering
+            # is missing its dot, so it is still sitting in front of the title.
+            tail = re.match(r"^(\d+)\s+(?=\D)", text)
+            if tail:
+                depth += 1
+                text = text[tail.end():]
+            return depth, text
+
+        # " С В Е Т" and " Э Л Е М Е Н Т Ы    П И Т А Н И Я" are top-level
+        # blocks written letter by letter, words separated by a wider gap.
+        groups = [group.split() for group in re.split(r"\s{2,}", title.strip()) if group.strip()]
+        letters = [word for group in groups for word in group]
+        if len(letters) >= 3 and all(len(word) == 1 for word in letters):
+            return 0, " ".join("".join(group) for group in groups)
+        return -1, " ".join(title.split())
+
+    def feed(self, row: dict[str, Any]) -> None:
+        if not self.is_section_row(row):
+            return
+        depth, title = self._parse(clean(row.get("Артикул")) or "")
+        if not title:
+            return
+        if depth < 0:
+            # Unnumbered heading such as "ВСЕ по 19..." - a sibling of the
+            # current section, not a new root and not a deeper level.
+            depth = max(len(self._path) - 1, 0)
+        self._path = self._path[:depth] + [title]
+
+    @property
+    def category(self) -> str | None:
+        return self._path[-1] if self._path else None
+
+    @property
+    def category_path(self) -> str | None:
+        return " / ".join(self._path) if self._path else None
+
+
 def _is_product_row(article: Any, price: Any) -> bool:
     sku = clean(article)
     if not sku or parse_decimal(price) is None:
@@ -67,12 +138,14 @@ def normalize_row(
     row: dict[str, Any],
     *,
     content: JazzwayContent | None = None,
+    section: SectionTracker | None = None,
     store_raw: bool = False,
 ) -> dict[str, Any] | None:
     """Normalize one price-file row, enriched with feed content when available.
 
-    The XLSX owns price and stock; the YML feed owns description, images, specs
-    and document links. Neither source alone is enough for a product card.
+    The XLSX owns price, stock and - through its section headers - the category;
+    the YML feed owns description, images, specs and document links. Neither
+    source alone is enough for a product card.
     """
     if not _is_product_row(row.get("Артикул"), row.get("Цена клиента")):
         return None
@@ -111,8 +184,12 @@ def normalize_row(
         "brand": "Jazzway",
         "manufacturer_code": (content.article if content else None) or sku.lstrip("."),
         "description": content.description if content else None,
-        "supplier_category": content.category if content else None,
-        "supplier_category_path": content.category_path if content else None,
+        # Price-file sections win: they exist for every priced row, and the
+        # markup rules are written against them.
+        "supplier_category": (section.category if section else None)
+        or (content.category if content else None),
+        "supplier_category_path": (section.category_path if section else None)
+        or (content.category_path if content else None),
         "price": price,
         "price_retail": price,
         "price_old": parse_decimal(row.get("Цена.1")) or parse_decimal(row.get("Цена")),
@@ -129,6 +206,7 @@ def normalize_row(
             "supplier_sku": sku,
             "name": normalized["name"],
             "description": normalized["description"],
+            "supplier_category_path": normalized["supplier_category_path"],
             "price": str(price) if price is not None else None,
             "stock_qty": str(stock) if stock is not None else None,
             "images_json": images,
@@ -167,12 +245,14 @@ def iter_jazzway_rows(
     skip_rows: int = 0,
 ) -> Iterator[dict[str, Any]]:
     df = pd.read_excel(xlsx_path, header=HEADER_ROW)
+    section = SectionTracker()
     emitted = 0
     skipped = 0
 
     for _, row in df.iterrows():
         item = row.to_dict()
-        normalized = normalize_row(item)
+        section.feed(item)
+        normalized = normalize_row(item, section=section)
         if not normalized:
             continue
         if skipped < skip_rows:
@@ -234,14 +314,18 @@ def import_jazzway_xlsx(
     else:
         _report(progress, "No content feed - importing price and stock only.")
 
+    section = SectionTracker()
+
     try:
         for row_number, row in df.iterrows():
             stats.rows_total += 1
             try:
                 row_dict = row.to_dict()
+                section.feed(row_dict)
                 normalized = normalize_row(
                     row_dict,
                     content=content_for(row_dict, feed_index),
+                    section=section,
                     store_raw=store_raw,
                 )
                 if not normalized:

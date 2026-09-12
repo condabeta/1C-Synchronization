@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup
 from pymysql.connections import Connection
 
 from staging.db import fetch_one
+from staging.pricing import apply_to_batch, load_rules
 
 SUPPLIER_CODE = "dekomo"
 SOURCE_CODE = "price_csv"
@@ -30,6 +31,11 @@ CORE_COLUMNS = {
     "Артикул поставщика": "manufacturer_code",
     "Группа товара": "supplier_category",
     "Дополнительное описание": "description",
+    # Present from the 09.09.2026 export onwards, which widened from 26 columns
+    # to 170. Absent from older files, so both are read defensively.
+    "Штрих-код": "barcode",
+    "ТН ВЭД": "tnved",
+    "Закупочная цена": "price",
 }
 
 IMAGE_COLUMNS = ("photo_big", "photo_small", "Большое дополнительное фото")
@@ -108,9 +114,22 @@ def _normalize_row(row: dict[str, Any], *, store_raw: bool) -> dict[str, Any] | 
 
     price_retail = _parse_decimal(row.get("МРЦ/РРЦ"))
     price_old = _parse_decimal(row.get("Старая РРЦ/МРЦ"))
+    # The 09.09.2026 export added a real purchase price. Before it, `price` had
+    # to stand in as a copy of the MRC. Keeping the MRC as `price_retail` means
+    # no displayed price moves - this only makes `price` mean for Dekomo what it
+    # already means for every other supplier, and gives a markup rule something
+    # to multiply if the client ever asks for one.
+    price_purchase = _parse_decimal(row.get("Закупочная цена"))
     stock_qty = _parse_stock(row.get("Количество на складе"))
     images = _build_images(row)
     attrs = _build_attributes(row, set(CORE_COLUMNS) | set(IMAGE_COLUMNS))
+
+    barcode = _clean(row.get("Штрих-код"))
+    # Stored under the key Arlight already uses, so one query can read the
+    # customs code across suppliers instead of guessing at each one's spelling.
+    tnved = _clean(row.get("ТН ВЭД"))
+    if tnved:
+        attrs["tnved"] = tnved
 
     normalized = {
         "supplier_sku": sku,
@@ -120,11 +139,12 @@ def _normalize_row(row: dict[str, Any], *, store_raw: bool) -> dict[str, Any] | 
         "manufacturer_code": _clean(row.get("Артикул поставщика")),
         "supplier_category": _clean(row.get("Группа товара")),
         "description": _clean(row.get("Дополнительное описание")),
-        "price": price_retail,
+        "price": price_purchase or price_retail,
         "price_retail": price_retail,
         "price_old": price_old,
         "stock_qty": stock_qty,
         "is_available": 1 if stock_qty is None or stock_qty > 0 else 0,
+        "barcode": barcode,
         "images_json": images,
         "attributes_json": attrs,
         "raw_data_json": row if store_raw else None,
@@ -135,9 +155,11 @@ def _normalize_row(row: dict[str, Any], *, store_raw: bool) -> dict[str, Any] | 
             "name": normalized["name"],
             "brand": normalized["brand"],
             "description": normalized["description"],
+            "price": str(price_purchase) if price_purchase is not None else None,
             "price_retail": str(price_retail) if price_retail is not None else None,
             "price_old": str(price_old) if price_old is not None else None,
             "stock_qty": str(stock_qty) if stock_qty is not None else None,
+            "barcode": barcode,
             "images_json": images,
             "attributes_json": attrs,
         }
@@ -318,17 +340,24 @@ def _upsert_batch(
     if not batch:
         return
 
+    # Dekomo ships an MRC/RRC column, so it has no markup rules by default and
+    # this leaves the price untouched. It runs anyway so that adding a rule for
+    # Dekomo later needs no code change here.
+    apply_to_batch(load_rules(conn, supplier_id), batch)
+
     insert_sql = """
         INSERT INTO supplier_products (
             supplier_id, import_run_id, supplier_sku, supplier_sku_raw,
             name, brand, manufacturer_code, supplier_category, description,
             price, price_retail, price_old, stock_qty, is_available,
+            barcode, pricing_rule_id,
             attributes_json, images_json, raw_data_json, content_hash,
             is_new, is_changed, last_import_run_id, last_seen_at
         ) VALUES (
             %(supplier_id)s, %(import_run_id)s, %(supplier_sku)s, %(supplier_sku_raw)s,
             %(name)s, %(brand)s, %(manufacturer_code)s, %(supplier_category)s, %(description)s,
             %(price)s, %(price_retail)s, %(price_old)s, %(stock_qty)s, %(is_available)s,
+            %(barcode)s, %(pricing_rule_id)s,
             %(attributes_json)s, %(images_json)s, %(raw_data_json)s, %(content_hash)s,
             %(is_new)s, %(is_changed)s, %(import_run_id)s, NOW()
         )
@@ -345,6 +374,10 @@ def _upsert_batch(
             price_old = VALUES(price_old),
             stock_qty = VALUES(stock_qty),
             is_available = VALUES(is_available),
+            -- An older export has no barcode column at all, so a re-import from
+            -- one must not wipe a code a newer file already supplied.
+            barcode = COALESCE(VALUES(barcode), barcode),
+            pricing_rule_id = VALUES(pricing_rule_id),
             attributes_json = VALUES(attributes_json),
             images_json = VALUES(images_json),
             raw_data_json = VALUES(raw_data_json),
@@ -390,6 +423,8 @@ def _upsert_batch(
                 "price_old": item["price_old"],
                 "stock_qty": item["stock_qty"],
                 "is_available": item["is_available"],
+                "barcode": item.get("barcode"),
+                "pricing_rule_id": item.get("pricing_rule_id"),
                 "attributes_json": json.dumps(item["attributes_json"], ensure_ascii=False),
                 "images_json": json.dumps(item["images_json"], ensure_ascii=False),
                 "raw_data_json": json.dumps(item["raw_data_json"], ensure_ascii=False)

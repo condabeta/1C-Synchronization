@@ -11,6 +11,7 @@ from typing import Any
 from pymysql.connections import Connection
 
 from staging.db import fetch_one
+from staging.pricing import apply_to_batch, load_rules
 
 
 @dataclass
@@ -209,19 +210,23 @@ def upsert_product_batch(
     if not batch:
         return
 
+    # Retail price is derived, not imported: the supplier's own price stays in
+    # `price`, and the markup rules of this supplier produce `price_retail`.
+    apply_to_batch(load_rules(conn, supplier_id), batch)
+
     insert_sql = """
         INSERT INTO supplier_products (
             supplier_id, import_run_id, supplier_sku, supplier_sku_raw,
             name, brand, manufacturer_code, description, supplier_category, supplier_category_path,
             price, price_retail, price_old, stock_qty, is_available,
-            product_url, barcode,
+            product_url, barcode, pricing_rule_id,
             attributes_json, images_json, raw_data_json, content_hash,
             is_new, is_changed, last_import_run_id, last_seen_at
         ) VALUES (
             %(supplier_id)s, %(import_run_id)s, %(supplier_sku)s, %(supplier_sku_raw)s,
             %(name)s, %(brand)s, %(manufacturer_code)s, %(description)s, %(supplier_category)s, %(supplier_category_path)s,
             %(price)s, %(price_retail)s, %(price_old)s, %(stock_qty)s, %(is_available)s,
-            %(product_url)s, %(barcode)s,
+            %(product_url)s, %(barcode)s, %(pricing_rule_id)s,
             %(attributes_json)s, %(images_json)s, %(raw_data_json)s, %(content_hash)s,
             %(is_new)s, %(is_changed)s, %(import_run_id)s, NOW()
         )
@@ -244,6 +249,7 @@ def upsert_product_batch(
             is_available = VALUES(is_available),
             product_url = VALUES(product_url),
             barcode = VALUES(barcode),
+            pricing_rule_id = VALUES(pricing_rule_id),
             attributes_json = VALUES(attributes_json),
             images_json = IF(
                 JSON_LENGTH(COALESCE(VALUES(images_json), JSON_ARRAY())) > 0,
@@ -295,6 +301,7 @@ def upsert_product_batch(
                 "is_available": item.get("is_available"),
                 "product_url": item.get("product_url"),
                 "barcode": item.get("barcode"),
+                "pricing_rule_id": item.get("pricing_rule_id"),
                 "attributes_json": json.dumps(item.get("attributes_json") or {}, ensure_ascii=False),
                 "images_json": json.dumps(item.get("images_json") or [], ensure_ascii=False),
                 "raw_data_json": json.dumps(item["raw_data_json"], ensure_ascii=False)

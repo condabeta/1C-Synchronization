@@ -36,7 +36,7 @@ class DatabaseConfig:
 
 DEKOMO_CSV_PATH = os.getenv(
     "DEKOMO_CSV_PATH",
-    r"D:\projects\1C\Декомо\content_20_08_2026_22_51.xls",
+    r"D:\projects\1C\Декомо\content_09_09_2026_13_35.xls",
 )
 DEKOMO_CSV_DEFAULT = DEKOMO_CSV_PATH
 
@@ -62,6 +62,19 @@ VIASVET_PHOTOS_DIR = os.getenv(
 CRYSTAL_XLS_DEFAULT = os.getenv(
     "CRYSTAL_XLS_PATH",
     r"D:\projects\1C\crystal\ПРАЙС LEDCRYSTAL от 05.08.2026.xls",
+)
+
+# Both files are XLSX workbooks that arrived named .pdf, and the Svet NN one
+# landed in the ViaSvet folder. The importers name the openpyxl engine
+# explicitly, so the extension does not matter - the paths do.
+SALUX_XLSX_DEFAULT = os.getenv(
+    "SALUX_XLSX_PATH",
+    r"D:\projects\1C\Салюкс\Прайс_лист_Дистрибьютор_Июнь_2026_Салюкс.pdf",
+)
+
+SVETNN_XLSX_DEFAULT = os.getenv(
+    "SVETNN_XLSX_PATH",
+    r"D:\projects\1C\Виа Свет\светнн1.pdf",
 )
 
 # SWG's export URL embeds a private token - anyone holding it can pull their

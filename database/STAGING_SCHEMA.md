@@ -22,7 +22,7 @@ suppliers + supplier_sources
 
 | Table | Purpose |
 |---|---|
-| `suppliers` | Dekomo, SWG, Jazzway, Crystal, ViaSvet, Arlight, Salux |
+| `suppliers` | Dekomo, SWG, Jazzway, Crystal, ViaSvet, Arlight, Salux, Svet NN |
 | `supplier_sources` | File path, URL, parser, cron schedule per data type |
 | `import_runs` | Each import batch with counts and errors |
 | `import_run_errors` | Row-level import errors |
@@ -37,6 +37,8 @@ suppliers + supplier_sources
 | `moderation_queue` | Pre-publication review |
 | `product_status_history` | Audit trail |
 | `sku_aliases` | Normalize SKU variants (e.g. ViaSvet В→B) |
+| `supplier_pricing_rules` | Markup coefficients per supplier/category → retail price |
+| `supplier_field_sync_config` | Which fields a supplier import may overwrite |
 | `sync_outbox` | Queue for 1C and OpenCart sync |
 
 ## Supplier field mapping
@@ -53,7 +55,22 @@ suppliers + supplier_sources
 | `vendor` | `brand` |
 | `picture`, `preview` | `images_json` |
 | `param[@name]` | `attributes_json` |
+| `Штрих-код` | `barcode` |
+| `ТН ВЭД` | `attributes_json.tnved` |
+| `Закупочная цена` | `price` |
+| `МРЦ/РРЦ` | `price_retail` |
 | full offer | `raw_data_json` |
+
+The HTML-XLS export widened from 26 columns to 170 on 09.09.2026, adding barcode
+(95% filled, GTIN-13), `ТН ВЭД` (49% filled), `Закупочная цена`, activity and
+marketplace-ban flags, document links and a dozen more photo slots. Barcode,
+`ТН ВЭД` and `Закупочная цена` are mapped - the rest still land in
+`attributes_json` as raw text. Before that export `price` could only be a copy of
+the MRC; now it is the real purchase price, which is what `price` means for every
+other supplier. Dekomo's own markup runs about x1.78. No displayed price moved:
+`price_retail` is still the MRC, and Dekomo has no markup rule. `ТН ВЭД` uses the same `tnved` key Arlight does, so one query reads the
+customs code across suppliers. Barcode is merged with `COALESCE`: re-importing an
+older, narrower export must not erase a code a newer one supplied.
 
 ### SWG (YML URL)
 
@@ -180,6 +197,40 @@ Coverage: **290 of 325 priced SKUs** matched, 527 images, 290 descriptions. The
 
 **Scope for Svetoyar (confirm with client):** profiles first; accessories/tape/power optional.
 
+### Salux (distributor XLSX, 16 sheets)
+
+Each sheet is a stack of blocks - group title, header, price sub-header, rows - so
+columns are read per block rather than per sheet.
+
+| Source field | Column |
+|---|---|
+| `Маркировка для заказа` / `Маркировка` | `supplier_sku`, `manufacturer_code` |
+| `Наименование` | `name` |
+| `Дистрибьютор` (4th price tier) | `price` |
+| sheet + block title | `supplier_category_path` |
+| all four price tiers, power, flux, size, mass | `attributes_json` |
+
+The order marking is **not unique**: 102 rows share one with a different product
+(same marking, different size and price). Colliding rows are split by the first
+field that separates them - size, then name, then sheet - appended in brackets.
+Blocks whose header has no marking column are option lists (dimming, IP upgrade,
+extended warranty) and are skipped.
+
+### Svet NN (XLSX)
+
+One flat table per sheet. Resells Salux hardware, so `Маркировка` repeats the Salux
+order markings - 259 positions overlap and will need merging in the catalogue.
+
+| Source field | Column |
+|---|---|
+| `Артикул` | `supplier_sku` |
+| `Наименование` | `name` |
+| `Маркировка` | `manufacturer_code` (shared key with Salux) |
+| `Категория` | `supplier_category` |
+| `Цена для дилера` | `price` |
+| `Цена для дилера*1,6` | not imported - used to verify the markup rule |
+
+
 ## Business rules
 
 ### New vs existing products
@@ -190,6 +241,22 @@ Coverage: **290 of 325 priced SKUs** matched, 527 images, 290 descriptions. The
 | Existing SKU, price/stock only changed | Update `product_supplier_offers`; auto-update `products` if already `published` |
 | Existing SKU, name/images/description changed | Flag `is_changed`; queue `major_change` for moderation |
 | Same item from 2 suppliers | Link via `product_supplier_links`; dedupe by barcode or manual merge |
+
+### Retail pricing
+
+`price` is always what the supplier sent; `price_retail` is derived from it by the
+markup rules in `supplier_pricing_rules`, applied at batch upsert time by
+`staging/pricing.py`. Coefficients, category matching and the recalculation script
+are documented in [../docs/pricing_rules.md](../docs/pricing_rules.md).
+
+| Supplier | Rule |
+|---|---|
+| Salux | everything x1.6, on the «Дистрибьютор» tier |
+| Svet NN | everything x1.6, on «Цена для дилера» (verified against the file's own x1.6 column) |
+| LED Crystal | tape x2, everything else x1.5 |
+| Jazzway | track x1.5, power supplies x1.5, lamps x1.35, luminaires x1.25, rest x1.25 |
+| ViaSvet | RRC column verbatim, no markup |
+| Dekomo, SWG, Arlight | no rules - price passes through unchanged |
 
 ### Product status flow
 
