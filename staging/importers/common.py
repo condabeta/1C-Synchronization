@@ -248,7 +248,9 @@ def upsert_product_batch(
             stock_qty = VALUES(stock_qty),
             is_available = VALUES(is_available),
             product_url = VALUES(product_url),
-            barcode = VALUES(barcode),
+            -- Same reasoning as description above: Jazzway's barcode comes from
+            -- the YML feed, so a price-only run must not erase it.
+            barcode = COALESCE(VALUES(barcode), barcode),
             pricing_rule_id = VALUES(pricing_rule_id),
             attributes_json = VALUES(attributes_json),
             images_json = IF(

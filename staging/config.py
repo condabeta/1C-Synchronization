@@ -64,17 +64,17 @@ CRYSTAL_XLS_DEFAULT = os.getenv(
     r"D:\projects\1C\crystal\ПРАЙС LEDCRYSTAL от 05.08.2026.xls",
 )
 
-# Both files are XLSX workbooks that arrived named .pdf, and the Svet NN one
-# landed in the ViaSvet folder. The importers name the openpyxl engine
-# explicitly, so the extension does not matter - the paths do.
+# Both arrived misnamed .pdf and were renamed to .xlsx on 2026-09-12. The Svet
+# NN file still lives in the ViaSvet folder. The importers name the openpyxl
+# engine explicitly, so the extension does not matter - the paths do.
 SALUX_XLSX_DEFAULT = os.getenv(
     "SALUX_XLSX_PATH",
-    r"D:\projects\1C\Салюкс\Прайс_лист_Дистрибьютор_Июнь_2026_Салюкс.pdf",
+    r"D:\projects\1C\Салюкс\Прайс_лист_Дистрибьютор_Июнь_2026_Салюкс.xlsx",
 )
 
 SVETNN_XLSX_DEFAULT = os.getenv(
     "SVETNN_XLSX_PATH",
-    r"D:\projects\1C\Виа Свет\светнн1.pdf",
+    r"D:\projects\1C\Виа Свет\светнн1.xlsx",
 )
 
 # SWG's export URL embeds a private token - anyone holding it can pull their

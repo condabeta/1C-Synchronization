@@ -41,7 +41,7 @@ from staging.importers.common import (
 
 SUPPLIER_CODE = "svetnn"
 SOURCE_CODE = "price_xlsx"
-DEFAULT_XLSX_PATH = r"D:\projects\1C\Виа Свет\светнн1.pdf"
+DEFAULT_XLSX_PATH = r"D:\projects\1C\Виа Свет\светнн1.xlsx"
 BATCH_SIZE = 200
 
 # Column order, taken from the header of the first sheet. Sheets without a
@@ -179,7 +179,8 @@ def iter_svetnn_rows(
     progress: Callable[[str], None] | None = None,
     store_raw: bool = False,
 ) -> Iterator[dict[str, Any]]:
-    # openpyxl is named explicitly: the file arrives with a .pdf extension.
+    # openpyxl is named explicitly rather than inferred: this file reached us
+    # misnamed .pdf once already, and the parse should not depend on the name.
     book = pd.ExcelFile(xlsx_path, engine="openpyxl")
     seen: set[str] = set()
     mismatches = 0

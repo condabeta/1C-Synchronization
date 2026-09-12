@@ -10,8 +10,9 @@
 -- coefficient stated by the supplier. We compute retail from the dealer price
 -- and use that column only to check the result.
 --
--- Both files are named .pdf but are XLSX workbooks. The importers name the
--- openpyxl engine explicitly rather than trusting the extension.
+-- Both files arrived misnamed .pdf and were renamed to .xlsx on 2026-09-12.
+-- The importers name the openpyxl engine explicitly rather than trusting the
+-- extension.
 
 USE svetoyar_staging;
 
@@ -33,22 +34,22 @@ SELECT s.id, v.code, v.source_type, v.format, v.location, v.header_row, v.sku_fi
 FROM suppliers s
 JOIN (
   SELECT 'salux' AS supplier_code, 'price_xlsx' AS code, 'file' AS source_type, 'xlsx' AS format,
-         'D:\\projects\\1C\\Салюкс\\Прайс_лист_Дистрибьютор_Июнь_2026_Салюкс.pdf' AS location,
+         'D:\\projects\\1C\\Салюкс\\Прайс_лист_Дистрибьютор_Июнь_2026_Салюкс.xlsx' AS location,
          NULL AS header_row, 'Маркировка для заказа' AS sku_field,
          JSON_OBJECT(
            'engine', 'openpyxl',
-           'note', 'file is XLSX despite the .pdf extension',
+           'note', 'arrived misnamed .pdf, renamed to .xlsx 2026-09-12',
            'layout', 'blocks: group title, header, price sub-header, rows',
            'price_tiers', JSON_ARRAY('Розница', 'Опт', 'Дилер', 'Дистрибьютор'),
            'base_tier', 'Дистрибьютор'
          ) AS config_json
   UNION ALL
   SELECT 'svetnn', 'price_xlsx', 'file', 'xlsx',
-         'D:\\projects\\1C\\Виа Свет\\светнн1.pdf',
+         'D:\\projects\\1C\\Виа Свет\\светнн1.xlsx',
          0, 'Артикул',
          JSON_OBJECT(
            'engine', 'openpyxl',
-           'note', 'file is XLSX despite the .pdf extension, stored in the ViaSvet folder',
+           'note', 'arrived misnamed .pdf, renamed 2026-09-12, stored in the ViaSvet folder',
            'base_column', 'Цена для дилера',
            'verify_column', 'Цена для дилера*1,6'
          )

@@ -44,7 +44,7 @@ from staging.importers.common import (
 
 SUPPLIER_CODE = "salux"
 SOURCE_CODE = "price_xlsx"
-DEFAULT_XLSX_PATH = r"D:\projects\1C\Салюкс\Прайс_лист_Дистрибьютор_Июнь_2026_Салюкс.pdf"
+DEFAULT_XLSX_PATH = r"D:\projects\1C\Салюкс\Прайс_лист_Дистрибьютор_Июнь_2026_Салюкс.xlsx"
 BATCH_SIZE = 200
 
 # Which tier the markup rule multiplies. The file is the distributor price list
@@ -285,8 +285,8 @@ def _discriminator(item: dict[str, Any], field_index: int) -> str:
 def _parse_workbook(
     xlsx_path: Path, *, store_raw: bool
 ) -> list[dict[str, Any]]:
-    # openpyxl is named explicitly: the file arrives with a .pdf extension and
-    # pandas cannot pick an engine from it.
+    # openpyxl is named explicitly rather than inferred: this file reached us
+    # misnamed .pdf once already, and the parse should not depend on the name.
     book = pd.ExcelFile(xlsx_path, engine="openpyxl")
     items: list[dict[str, Any]] = []
     for sheet in book.sheet_names:
