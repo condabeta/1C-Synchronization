@@ -7,9 +7,9 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
+from html import unescape
 from pathlib import Path
 from typing import Any, Callable, Iterator
-from bs4 import BeautifulSoup
 
 from pymysql.connections import Connection
 
@@ -167,50 +167,76 @@ def _normalize_row(row: dict[str, Any], *, store_raw: bool) -> dict[str, Any] | 
     return normalized
 
 
+_TD_RE = re.compile(r"<td[^>]*>(.*?)</td>", re.DOTALL | re.IGNORECASE)
+_TAG_RE = re.compile(r"<[^>]+>")
+_ROW_END_RE = re.compile(r"</tr\s*>", re.IGNORECASE)
+READ_CHUNK = 1 << 20
+
+
+def _cell_text(fragment: str) -> str:
+    """Text of one cell, matching what BeautifulSoup's get_text(strip=True) gave."""
+    return unescape(_TAG_RE.sub("", fragment)).strip()
+
+
+def _iter_html_rows(csv_path: Path) -> Iterator[dict[str, Any]]:
+    """Stream the HTML export one <tr> at a time.
+
+    The 09.09.2026 file is 544 MB: 170 columns across ~200k rows, roughly 34
+    million cells. Parsing that into a DOM needs an object per cell and runs the
+    machine out of memory long before the first row is written, so rows are cut
+    out of a sliding buffer and dropped as soon as they are yielded.
+    """
+    headers: list[str] | None = None
+    buffer = ""
+
+    with csv_path.open("r", encoding="utf-8-sig", errors="replace") as handle:
+        while True:
+            chunk = handle.read(READ_CHUNK)
+            if not chunk:
+                break
+            buffer += chunk
+            while True:
+                match = _ROW_END_RE.search(buffer)
+                if not match:
+                    break
+                block, buffer = buffer[: match.start()], buffer[match.end() :]
+                cells = [_cell_text(cell) for cell in _TD_RE.findall(block)]
+                if not cells:
+                    continue
+                if headers is None:
+                    headers = cells
+                    continue
+                yield dict(zip(headers, cells))
+
+    # A final row is not always closed with </tr> before </table>.
+    if headers is not None and buffer:
+        cells = [_cell_text(cell) for cell in _TD_RE.findall(buffer)]
+        if cells:
+            yield dict(zip(headers, cells))
+
+
+def _iter_csv_rows(csv_path: Path) -> Iterator[dict[str, Any]]:
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        yield from csv.DictReader(handle, delimiter=";")
+
+
 def iter_dekomo_rows(
     csv_path: Path,
     limit: int | None = None,
     skip_rows: int = 0,
 ) -> Iterator[dict[str, Any]]:
-    # Check if file is HTML (new format) or CSV (old format)
     with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
-        first_chars = handle.read(10)
-        handle.seek(0)
-        
-        if "<!DOCTYPE" in first_chars or "<html" in first_chars:
-            # Parse HTML format
-            html_content = handle.read()
-            soup = BeautifulSoup(html_content, 'html.parser')
-            table = soup.find('table')
-            if table:
-                rows = table.find_all('tr')
-                # Get headers from first row
-                header_row = rows[0]
-                headers = [cell.get_text(strip=True) for cell in header_row.find_all('td')]
-                
-                # Skip header row and skip_rows
-                for i, row in enumerate(rows[1:], start=1):
-                    if i <= skip_rows:
-                        continue
-                    if limit is not None and i - skip_rows > limit:
-                        break
-                    
-                    cells = row.find_all('td')
-                    row_dict = {}
-                    for j, cell in enumerate(cells):
-                        if j < len(headers):
-                            row_dict[headers[j]] = cell.get_text(strip=True)
-                    yield row_dict
-        else:
-            # Parse CSV format (old)
-            reader = csv.DictReader(handle, delimiter=";")
-            for index, row in enumerate(reader, start=2):
-                data_row_number = index - 1
-                if data_row_number <= skip_rows:
-                    continue
-                if limit is not None and data_row_number - skip_rows > limit:
-                    break
-                yield row
+        head = handle.read(10)
+    is_html = "<!DOCTYPE" in head or "<html" in head
+
+    source = _iter_html_rows(csv_path) if is_html else _iter_csv_rows(csv_path)
+
+    for index, row in enumerate(source, start=1):
+        if index <= skip_rows:
+            continue
+        if limit is not None and index - skip_rows > limit:
+            break
+        yield row
 
 
 def _close_stale_runs(conn: Connection, supplier_id: int) -> None:

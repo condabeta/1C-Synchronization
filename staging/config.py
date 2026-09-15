@@ -64,17 +64,31 @@ CRYSTAL_XLS_DEFAULT = os.getenv(
     r"D:\projects\1C\crystal\ПРАЙС LEDCRYSTAL от 05.08.2026.xls",
 )
 
-# Both arrived misnamed .pdf and were renamed to .xlsx on 2026-09-12. The Svet
-# NN file still lives in the ViaSvet folder. The importers name the openpyxl
-# engine explicitly, so the extension does not matter - the paths do.
+# Arrived misnamed .pdf and renamed to .xlsx on 2026-09-12. The importer names
+# the openpyxl engine explicitly, so the extension does not matter - the path does.
 SALUX_XLSX_DEFAULT = os.getenv(
     "SALUX_XLSX_PATH",
     r"D:\projects\1C\Салюкс\Прайс_лист_Дистрибьютор_Июнь_2026_Салюкс.xlsx",
 )
 
-SVETNN_XLSX_DEFAULT = os.getenv(
-    "SVETNN_XLSX_PATH",
+# Svetoyar's own price list for Salux-made goods - our articles and our names,
+# not a supplier feed. Still filed under the ViaSvet folder, where it arrived.
+OWN_PRICE_XLSX_DEFAULT = os.getenv(
+    "OWN_PRICE_XLSX_PATH",
     r"D:\projects\1C\Виа Свет\светнн1.xlsx",
+)
+
+# Arlight ships two files: an XML with photos, barcodes and customs codes, and
+# an Excel price with stock and descriptions. The 11.09.2026 price carries the
+# corrected descriptions the client asked for.
+ARLIGHT_XML_DEFAULT = os.getenv(
+    "ARLIGHT_XML_PATH",
+    r"D:\projectsC\Арлайт\products.xml",
+)
+
+ARLIGHT_XLSX_DEFAULT = os.getenv(
+    "ARLIGHT_XLSX_PATH",
+    r"D:\projectsC\Арлайт\Прайс Арлайт.xlsx",
 )
 
 # SWG's export URL embeds a private token - anyone holding it can pull their

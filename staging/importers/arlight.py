@@ -8,6 +8,7 @@ import pandas as pd
 
 from pymysql.connections import Connection
 
+from staging.config import ARLIGHT_XLSX_DEFAULT, ARLIGHT_XML_DEFAULT
 from staging.importers.common import (
     ImportStats,
     bytes_sha256,
@@ -26,8 +27,8 @@ from staging.importers.common import (
 
 SUPPLIER_CODE = "arlight"
 SOURCE_CODE = "xml_excel"
-DEFAULT_XML_PATH = r"D:\projects\1C\Арлайт\products.xml"
-DEFAULT_EXCEL_PATH = r"D:\projects\1C\Арлайт\Прайс от 18.08.2026.xlsx"
+DEFAULT_XML_PATH = ARLIGHT_XML_DEFAULT
+DEFAULT_EXCEL_PATH = ARLIGHT_XLSX_DEFAULT
 BATCH_SIZE = 500
 
 

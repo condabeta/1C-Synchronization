@@ -52,9 +52,12 @@ def as_decimal(value: Any) -> Decimal | None:
     if isinstance(value, Decimal):
         return value
     try:
-        return Decimal(str(value).strip().replace(" ", "").replace(",", "."))
+        parsed = Decimal(str(value).strip().replace(" ", "").replace(",", "."))
     except (DecimalException, ValueError):
         return None
+    # An empty Excel cell arrives as float('nan'), which Decimal accepts happily
+    # and then raises InvalidOperation on the first comparison.
+    return parsed if parsed.is_finite() else None
 
 
 def _round(value: Decimal, round_to: Decimal | None) -> Decimal:
