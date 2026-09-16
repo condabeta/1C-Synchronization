@@ -39,6 +39,9 @@ suppliers + supplier_sources
 | `sku_aliases` | Normalize SKU variants (e.g. ViaSvet В→B) |
 | `supplier_pricing_rules` | Markup coefficients per supplier/category → retail price |
 | `supplier_field_sync_config` | Which fields a supplier import may overwrite |
+| `certificates` | Conformity documents: declarations, certificates, refusal letters, with registry and scan links |
+| `product_certificates` | Which products each document covers, by supplier and article |
+| `own_articles` | Svetoyar's own articles and names for Salux-made goods |
 | `sync_outbox` | Queue for 1C and OpenCart sync |
 
 ## Supplier field mapping
