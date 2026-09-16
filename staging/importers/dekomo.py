@@ -102,6 +102,18 @@ def _build_attributes(row: dict[str, Any], core_and_image: set[str]) -> dict[str
     return attrs
 
 
+BARCODE_MAX = 64  # supplier_products.barcode is VARCHAR(64)
+
+
+def _split_barcodes(value: Any) -> list[str]:
+    """Individual GTINs from a cell that may hold several, comma-separated."""
+    text = _clean(value)
+    if not text:
+        return []
+    parts = [part.strip() for part in re.split(r"[,;\s]+", text)]
+    return [part[:BARCODE_MAX] for part in parts if part]
+
+
 def _content_hash(payload: dict[str, Any]) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -124,7 +136,13 @@ def _normalize_row(row: dict[str, Any], *, store_raw: bool) -> dict[str, Any] | 
     images = _build_images(row)
     attrs = _build_attributes(row, set(CORE_COLUMNS) | set(IMAGE_COLUMNS))
 
-    barcode = _clean(row.get("Штрих-код"))
+    # 72 products carry several GTINs in one cell - one per pack or variant -
+    # comma-separated, up to 133 characters. The column holds a single GTIN for
+    # matching across suppliers, so it takes the first; the full list is kept.
+    barcodes = _split_barcodes(row.get("Штрих-код"))
+    barcode = barcodes[0] if barcodes else None
+    if len(barcodes) > 1:
+        attrs["barcodes"] = barcodes
     # Stored under the key Arlight already uses, so one query can read the
     # customs code across suppliers instead of guessing at each one's spelling.
     tnved = _clean(row.get("ТН ВЭД"))
@@ -339,6 +357,71 @@ def _log_error(conn: Connection, run_id: int, row_number: int, sku: str | None, 
         )
 
 
+def _flush_batch(
+    conn: Connection,
+    supplier_id: int,
+    run_id: int,
+    batch: list[dict[str, Any]],
+    existing_hashes: dict[str, str],
+    stats: ImportStats,
+) -> None:
+    """Write a batch, isolating any row the database rejects. Always empties it.
+
+    One bad row used to fail the whole insert, and because the batch was only
+    cleared after a successful write, every following row appended to the same
+    batch and retried the same doomed insert. A single over-long barcode at row
+    53,606 stalled three runs that way and logged 86,760 identical errors.
+
+    On failure the batch is retried row by row, so the good rows still land and
+    only the bad ones are logged. _upsert_batch updates the counters and the
+    known-hash map before it writes, so both are rolled back first - otherwise the
+    retry would double-count, and would read every row as already written and skip
+    it.
+    """
+    skus = [item["supplier_sku"] for item in batch]
+    existing_hashes.update(_load_existing_hashes(conn, supplier_id, skus))
+    saved_hashes = {sku: existing_hashes.get(sku) for sku in skus}
+    saved_counts = (stats.rows_imported, stats.rows_updated, stats.rows_skipped)
+
+    try:
+        _upsert_batch(conn, supplier_id, run_id, batch, existing_hashes, stats)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        stats.rows_imported, stats.rows_updated, stats.rows_skipped = saved_counts
+        for sku, known in saved_hashes.items():
+            if known is None:
+                existing_hashes.pop(sku, None)
+            else:
+                existing_hashes[sku] = known
+
+        for item in batch:
+            sku = item["supplier_sku"]
+            before = (stats.rows_imported, stats.rows_updated, stats.rows_skipped)
+            known = existing_hashes.get(sku)
+            try:
+                _upsert_batch(conn, supplier_id, run_id, [item], existing_hashes, stats)
+                conn.commit()
+            except Exception as exc:
+                conn.rollback()
+                stats.rows_imported, stats.rows_updated, stats.rows_skipped = before
+                # The file repeats some SKUs, so a row left marked as written here
+                # would be skipped as unchanged when it turns up again.
+                if known is None:
+                    existing_hashes.pop(sku, None)
+                else:
+                    existing_hashes[sku] = known
+                stats.rows_errors += 1
+                stats.errors.append({"row": None, "error": f"{item['supplier_sku']}: {exc}"})
+                _log_error(
+                    conn, run_id, None, item["supplier_sku"], str(exc),
+                    {"supplier_sku": item["supplier_sku"], "barcode": item.get("barcode")},
+                )
+                conn.commit()
+    finally:
+        batch.clear()
+
+
 def _load_existing_hashes(conn: Connection, supplier_id: int, skus: list[str]) -> dict[str, str]:
     if not skus:
         return {}
@@ -521,42 +604,36 @@ def import_dekomo_csv(
             stats.rows_total += 1
             try:
                 normalized = _normalize_row(row, store_raw=store_raw)
-                if not normalized:
-                    stats.rows_skipped += 1
-                    continue
-                batch.append(normalized)
-
-                if len(batch) >= BATCH_SIZE:
-                    batch_number += 1
-                    skus = [item["supplier_sku"] for item in batch]
-                    existing_hashes.update(_load_existing_hashes(conn, supplier_id, skus))
-                    _upsert_batch(conn, supplier_id, run_id, batch, existing_hashes, stats)
-                    conn.commit()
-                    batch.clear()
-
-                    if batch_number % PROGRESS_EVERY_BATCHES == 0:
-                        db_count = _count_supplier_products(conn, supplier_id)
-                        _report(
-                            progress,
-                            (
-                                f"  batch {batch_number}: csv {stats.rows_total:,} rows | "
-                                f"db {db_count:,} products | "
-                                f"new {stats.rows_imported:,} | updated {stats.rows_updated:,} | "
-                                f"unchanged {stats.rows_skipped:,} | errors {stats.rows_errors:,}"
-                            ),
-                        )
             except Exception as exc:
                 stats.rows_errors += 1
                 stats.errors.append({"row": row_number, "error": str(exc)})
                 _log_error(conn, run_id, row_number, row.get("Артикул"), str(exc), row)
                 conn.commit()
+                continue
+            if not normalized:
+                stats.rows_skipped += 1
+                continue
+            batch.append(normalized)
+
+            if len(batch) >= BATCH_SIZE:
+                batch_number += 1
+                _flush_batch(conn, supplier_id, run_id, batch, existing_hashes, stats)
+
+                if batch_number % PROGRESS_EVERY_BATCHES == 0:
+                    db_count = _count_supplier_products(conn, supplier_id)
+                    _report(
+                        progress,
+                        (
+                            f"  batch {batch_number}: csv {stats.rows_total:,} rows | "
+                            f"db {db_count:,} products | "
+                            f"new {stats.rows_imported:,} | updated {stats.rows_updated:,} | "
+                            f"unchanged {stats.rows_skipped:,} | errors {stats.rows_errors:,}"
+                        ),
+                    )
 
         if batch:
             batch_number += 1
-            skus = [item["supplier_sku"] for item in batch]
-            existing_hashes.update(_load_existing_hashes(conn, supplier_id, skus))
-            _upsert_batch(conn, supplier_id, run_id, batch, existing_hashes, stats)
-            conn.commit()
+            _flush_batch(conn, supplier_id, run_id, batch, existing_hashes, stats)
             _report(
                 progress,
                 (
