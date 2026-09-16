@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import colorsys
 import hashlib
 import re
+from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+import openpyxl
 import pandas as pd
 from pymysql.connections import Connection
 
@@ -27,7 +31,7 @@ from staging.importers.common import (
 SUPPLIER_CODE = "viasvet"
 SOURCE_CODE = "price_xlsx"
 DEFAULT_XLSX_PATH = (
-    r"D:\projects\1C\Виа Свет\ViaSvet_led_профиль_блоки_питания_лента_ПОСТУПЛЕНИЕ5.xlsx"
+    r"D:\projects\1C\Виа Свет\ViaSvet_led_профиль_блоки_питания_лента_ПОСТУПЛЕНИЕ5 (3).xlsx"
 )
 DEFAULT_PHOTOS_DIR = r"D:\projects\1C\Виа Свет\на сайт"
 BATCH_SIZE = 200
@@ -229,6 +233,100 @@ def _has_price(value: Any) -> bool:
     return text not in ("", "nan", "none") and "наличии" not in text
 
 
+@dataclass(frozen=True)
+class StockBand:
+    """A stock range read from a cell colour. ViaSvet gives ranges, not counts."""
+
+    label: str
+    # The lowest quantity the band promises, stored as stock_qty so "in stock"
+    # checks work. It is a floor, never a count - the label is the truth.
+    floor: int
+    available: bool
+
+
+# ViaSvet encodes stock as the background colour of one column, with a legend at
+# the top of the sheet: green > 1000, yellow 500-1000, red 100-500.
+BAND_GREEN = StockBand(">1000", 1000, True)
+BAND_YELLOW = StockBand("500-1000", 500, True)
+BAND_RED = StockBand("100-500", 100, True)
+BAND_OUT = StockBand("нет в наличии", 0, False)
+
+
+def _band_for_fill(cell: Any) -> StockBand | None:
+    """Classify a cell fill by hue rather than by exact colour.
+
+    The cells were painted by hand and do not match their own legend: the legend
+    green is 00B050 while the painted green is 1F7012, and yellow appears as both
+    F0EA00 and FFFF00. Matching exact RGB would miss 44 of 47 rows on the LED
+    profile sheet, so the hue decides.
+    """
+    fill = cell.fill
+    if fill is None or fill.fill_type in (None, "none"):
+        return None
+    colour = fill.start_color
+    if colour is None or colour.type != "rgb":
+        return None  # theme colours here are the white page background
+    rgb = str(colour.rgb or "")
+    if len(rgb) != 8:
+        return None
+    red, green, blue = (int(rgb[i : i + 2], 16) / 255 for i in (2, 4, 6))
+    hue, saturation, value = colorsys.rgb_to_hsv(red, green, blue)
+    if saturation < 0.35 or value < 0.2:
+        return None  # white, grey or near-black - not a stock marker
+    degrees = hue * 360
+    if degrees < 20 or degrees >= 340:
+        return BAND_RED
+    if degrees < 70:
+        return BAND_YELLOW
+    if degrees < 170:
+        return BAND_GREEN
+    return None
+
+
+# A stock column is one where at least this many data cells carry a band colour.
+STOCK_COLUMN_MIN_CELLS = 3
+STOCK_SCAN_COLUMNS = 20
+FIRST_DATA_ROW = 5
+
+
+def _find_stock_column(sheet: Any) -> int | None:
+    """The column holding the stock colours, found rather than hardcoded.
+
+    It moves between sheets - column H on the profile sheets, M on the power
+    supply sheets - and the "Наличие->" header does not sit above it, so the
+    column with the most band-coloured cells is taken.
+    """
+    best_column, best_count = None, 0
+    for column in range(1, min(sheet.max_column, STOCK_SCAN_COLUMNS) + 1):
+        count = sum(
+            1
+            for row in range(FIRST_DATA_ROW, sheet.max_row + 1)
+            if _band_for_fill(sheet.cell(row, column))
+        )
+        if count > best_count:
+            best_column, best_count = column, count
+    return best_column if best_count >= STOCK_COLUMN_MIN_CELLS else None
+
+
+def read_stock_bands(xlsx_path: Path) -> dict[tuple[str, int], StockBand]:
+    """{(sheet, 1-based Excel row): band} for every row with a stock marker."""
+    book = openpyxl.load_workbook(xlsx_path)
+    bands: dict[tuple[str, int], StockBand] = {}
+    for sheet in book.worksheets:
+        column = _find_stock_column(sheet)
+        if column is None:
+            continue
+        for row in range(FIRST_DATA_ROW, sheet.max_row + 1):
+            cell = sheet.cell(row, column)
+            if "нет в наличии" in str(cell.value or "").lower():
+                bands[(sheet.title, row)] = BAND_OUT
+                continue
+            band = _band_for_fill(cell)
+            if band:
+                bands[(sheet.title, row)] = band
+    return bands
+
+
 def normalize_product(
     *,
     sheet: str,
@@ -242,6 +340,7 @@ def normalize_product(
     extra_attrs: dict[str, Any] | None = None,
     photo_index: dict[str, list[str]],
     aliases: dict[str, str],
+    stock_band: StockBand | None = None,
     store_raw: bool = False,
     raw_row: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
@@ -259,6 +358,8 @@ def normalize_product(
         attrs["packaging"] = packaging
     if extra_attrs:
         attrs.update(extra_attrs)
+    if stock_band:
+        attrs["stock_band"] = stock_band.label
 
     normalized = {
         "supplier_sku": sku,
@@ -271,8 +372,10 @@ def normalize_product(
         "price": parsed_price,
         "price_retail": parsed_rrc or parsed_price,
         "price_old": parsed_rrc,
-        "stock_qty": None,
-        "is_available": 1,
+        # No colour means the sheet says nothing about this row, so stock stays
+        # unknown rather than being read as zero.
+        "stock_qty": Decimal(stock_band.floor) if stock_band else None,
+        "is_available": (1 if stock_band.available else 0) if stock_band else 1,
         "product_url": "https://www.viasvet.ru",
         "barcode": None,
         "images_json": images,
@@ -285,6 +388,7 @@ def normalize_product(
             "name": name,
             "price": str(parsed_price),
             "price_retail": str(parsed_rrc) if parsed_rrc is not None else None,
+            "stock_band": stock_band.label if stock_band else None,
             "images_json": images,
             "attributes_json": attrs,
         }
@@ -297,11 +401,12 @@ def parse_profile_rows(
     photo_index: dict[str, list[str]],
     aliases: dict[str, str],
     *,
+    bands: dict[tuple[str, int], StockBand] | None = None,
     store_raw: bool = False,
 ) -> Iterator[dict[str, Any]]:
     for sheet in PROFILE_SHEETS:
         df = pd.read_excel(xlsx_path, sheet_name=sheet, header=None)
-        for _, row in df.iterrows():
+        for index, row in df.iterrows():
             name = clean(_cell(row, 0))
             if not name or "SP" not in name.upper():
                 continue
@@ -320,6 +425,7 @@ def parse_profile_rows(
                 packaging=clean(_cell(row, 4)),
                 photo_index=photo_index,
                 aliases=aliases,
+                stock_band=(bands or {}).get((sheet, index + 1)),
                 store_raw=store_raw,
                 raw_row=row.to_dict(),
             )
@@ -332,10 +438,11 @@ def parse_accessory_rows(
     photo_index: dict[str, list[str]],
     aliases: dict[str, str],
     *,
+    bands: dict[tuple[str, int], StockBand] | None = None,
     store_raw: bool = False,
 ) -> Iterator[dict[str, Any]]:
     df = pd.read_excel(xlsx_path, sheet_name=ACCESSORY_SHEET, header=None)
-    for _, row in df.iterrows():
+    for index, row in df.iterrows():
         name = clean(_cell(row, 0))
         sku_pair = extract_accessory_sku(name or "")
         if not sku_pair:
@@ -351,6 +458,7 @@ def parse_accessory_rows(
             kit=clean(_cell(row, 3)),
             photo_index=photo_index,
             aliases=aliases,
+            stock_band=(bands or {}).get((ACCESSORY_SHEET, index + 1)),
             store_raw=store_raw,
             raw_row=row.to_dict(),
         )
@@ -363,10 +471,11 @@ def parse_tape_rows(
     photo_index: dict[str, list[str]],
     aliases: dict[str, str],
     *,
+    bands: dict[tuple[str, int], StockBand] | None = None,
     store_raw: bool = False,
 ) -> Iterator[dict[str, Any]]:
     df = pd.read_excel(xlsx_path, sheet_name=TAPE_SHEET, header=None)
-    for _, row in df.iterrows():
+    for index, row in df.iterrows():
         sku_pair = extract_tape_sku(row)
         if not sku_pair:
             continue
@@ -387,6 +496,7 @@ def parse_tape_rows(
             extra_attrs={"price_per_meter": clean(_cell(row, 5))},
             photo_index=photo_index,
             aliases=aliases,
+            stock_band=(bands or {}).get((TAPE_SHEET, index + 1)),
             store_raw=store_raw,
             raw_row=row.to_dict(),
         )
@@ -399,11 +509,12 @@ def parse_ps_rows(
     photo_index: dict[str, list[str]],
     aliases: dict[str, str],
     *,
+    bands: dict[tuple[str, int], StockBand] | None = None,
     store_raw: bool = False,
 ) -> Iterator[dict[str, Any]]:
     for sheet in PS_SHEETS:
         df = pd.read_excel(xlsx_path, sheet_name=sheet, header=None)
-        for _, row in df.iterrows():
+        for index, row in df.iterrows():
             parsed = extract_ps_sku(row, sheet)
             if not parsed:
                 continue
@@ -428,6 +539,7 @@ def parse_ps_rows(
                 extra_attrs={k: v for k, v in attrs.items() if v},
                 photo_index=photo_index,
                 aliases=aliases,
+                stock_band=(bands or {}).get((sheet, index + 1)),
                 store_raw=store_raw,
                 raw_row=row.to_dict(),
             )
@@ -445,13 +557,17 @@ def iter_viasvet_products(
 ) -> Iterator[dict[str, Any]]:
     photo_index = scan_photo_folders(photos_dir)
     alias_map = aliases or {}
+    # Stock lives in cell colours, which pandas cannot see, so it is read once
+    # with openpyxl and looked up by (sheet, row) as each parser walks its rows.
+    bands = read_stock_bands(xlsx_path)
+    common = {"bands": bands, "store_raw": store_raw}
 
-    yield from parse_profile_rows(xlsx_path, photo_index, alias_map, store_raw=store_raw)
+    yield from parse_profile_rows(xlsx_path, photo_index, alias_map, **common)
     if profiles_only:
         return
-    yield from parse_accessory_rows(xlsx_path, photo_index, alias_map, store_raw=store_raw)
-    yield from parse_tape_rows(xlsx_path, photo_index, alias_map, store_raw=store_raw)
-    yield from parse_ps_rows(xlsx_path, photo_index, alias_map, store_raw=store_raw)
+    yield from parse_accessory_rows(xlsx_path, photo_index, alias_map, **common)
+    yield from parse_tape_rows(xlsx_path, photo_index, alias_map, **common)
+    yield from parse_ps_rows(xlsx_path, photo_index, alias_map, **common)
 
 
 def count_viasvet_products(

@@ -195,6 +195,22 @@ Coverage: **290 of 325 priced SKUs** matched, 527 images, 290 descriptions. The
 | Photo folder `на сайт/{SKU}/` | `product_images` (local_file) |
 | viasvet.ru | `description`, extra attrs |
 
+**Stock is a cell colour, not a number.** ViaSvet paints one column per sheet
+(H on the profile sheets, M on the power-supply sheets) with a legend at the top:
+green > 1000, yellow 500–1000, red 100–500. pandas cannot see fills, so
+`read_stock_bands` reads them with openpyxl and the parsers look them up by
+(sheet, row). The column is found by scanning for band colours rather than
+hardcoded, because it moves between sheets and the «Наличие->» header does not
+sit above it.
+
+The colours are classified by **hue**, not exact RGB. They were painted by hand
+and do not match their own legend (legend green `00B050`, painted green
+`1F7012`), so exact matching would miss 44 of 47 rows. The band's lower bound
+goes into `stock_qty` as a floor so availability checks work; the real meaning
+is kept in `attributes_json.stock_band`. Uncoloured rows stay unknown rather than
+being read as zero. Accessories, tape and ultra-thin supplies carry no colouring
+at all, so they have no stock data.
+
 **Scope for Svetoyar (confirm with client):** profiles first; accessories/tape/power optional.
 
 ### Salux (distributor XLSX, 16 sheets)

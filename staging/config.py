@@ -52,7 +52,7 @@ JAZZWAY_YML_URL = os.getenv(
 
 VIASVET_XLSX_DEFAULT = os.getenv(
     "VIASVET_XLSX_PATH",
-    r"D:\projects\1C\Виа Свет\ViaSvet_led_профиль_блоки_питания_лента_ПОСТУПЛЕНИЕ5.xlsx",
+    r"D:\projects\1C\Виа Свет\ViaSvet_led_профиль_блоки_питания_лента_ПОСТУПЛЕНИЕ5 (3).xlsx",
 )
 VIASVET_PHOTOS_DIR = os.getenv(
     "VIASVET_PHOTOS_DIR",
