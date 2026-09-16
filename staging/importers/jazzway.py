@@ -17,11 +17,10 @@ from staging.importers.common import (
     file_sha256,
     finish_import_run,
     get_supplier_and_source,
-    load_existing_hashes,
     log_import_error,
     parse_decimal,
     start_import_run,
-    upsert_product_batch,
+    flush_product_batch,
 )
 
 SUPPLIER_CODE = "jazzway"
@@ -340,11 +339,7 @@ def import_jazzway_xlsx(
                 batch.append(normalized)
                 if len(batch) >= BATCH_SIZE:
                     batch_number += 1
-                    skus = [item["supplier_sku"] for item in batch]
-                    existing_hashes.update(load_existing_hashes(conn, supplier_id, skus))
-                    upsert_product_batch(conn, supplier_id, run_id, batch, existing_hashes, stats)
-                    conn.commit()
-                    batch.clear()
+                    flush_product_batch(conn, supplier_id, run_id, batch, existing_hashes, stats)
                     _report(
                         progress,
                         (
@@ -369,10 +364,7 @@ def import_jazzway_xlsx(
 
         if batch:
             batch_number += 1
-            skus = [item["supplier_sku"] for item in batch]
-            existing_hashes.update(load_existing_hashes(conn, supplier_id, skus))
-            upsert_product_batch(conn, supplier_id, run_id, batch, existing_hashes, stats)
-            conn.commit()
+            flush_product_batch(conn, supplier_id, run_id, batch, existing_hashes, stats)
             _report(
                 progress,
                 (

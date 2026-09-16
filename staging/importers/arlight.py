@@ -18,11 +18,10 @@ from staging.importers.common import (
     count_supplier_products,
     finish_import_run,
     get_supplier_and_source,
-    load_existing_hashes,
     log_import_error,
     parse_decimal,
     start_import_run,
-    upsert_product_batch,
+    flush_product_batch,
 )
 
 SUPPLIER_CODE = "arlight"
@@ -230,11 +229,7 @@ def import_arlight(
             
             if len(batch) >= BATCH_SIZE:
                 batch_number += 1
-                skus = [row["supplier_sku"] for row in batch]
-                existing_hashes.update(load_existing_hashes(conn, supplier_id, skus))
-                upsert_product_batch(conn, supplier_id, run_id, batch, existing_hashes, stats)
-                conn.commit()
-                batch.clear()
+                flush_product_batch(conn, supplier_id, run_id, batch, existing_hashes, stats)
                 _report(
                     progress,
                     (
@@ -247,10 +242,7 @@ def import_arlight(
         
         if batch:
             batch_number += 1
-            skus = [row["supplier_sku"] for row in batch]
-            existing_hashes.update(load_existing_hashes(conn, supplier_id, skus))
-            upsert_product_batch(conn, supplier_id, run_id, batch, existing_hashes, stats)
-            conn.commit()
+            flush_product_batch(conn, supplier_id, run_id, batch, existing_hashes, stats)
             _report(
                 progress,
                 (

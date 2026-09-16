@@ -14,6 +14,7 @@ from typing import Any, Callable, Iterator
 from pymysql.connections import Connection
 
 from staging.db import fetch_one
+from staging.importers.common import flush_product_batch
 from staging.pricing import apply_to_batch, load_rules
 
 SUPPLIER_CODE = "dekomo"
@@ -357,71 +358,6 @@ def _log_error(conn: Connection, run_id: int, row_number: int, sku: str | None, 
         )
 
 
-def _flush_batch(
-    conn: Connection,
-    supplier_id: int,
-    run_id: int,
-    batch: list[dict[str, Any]],
-    existing_hashes: dict[str, str],
-    stats: ImportStats,
-) -> None:
-    """Write a batch, isolating any row the database rejects. Always empties it.
-
-    One bad row used to fail the whole insert, and because the batch was only
-    cleared after a successful write, every following row appended to the same
-    batch and retried the same doomed insert. A single over-long barcode at row
-    53,606 stalled three runs that way and logged 86,760 identical errors.
-
-    On failure the batch is retried row by row, so the good rows still land and
-    only the bad ones are logged. _upsert_batch updates the counters and the
-    known-hash map before it writes, so both are rolled back first - otherwise the
-    retry would double-count, and would read every row as already written and skip
-    it.
-    """
-    skus = [item["supplier_sku"] for item in batch]
-    existing_hashes.update(_load_existing_hashes(conn, supplier_id, skus))
-    saved_hashes = {sku: existing_hashes.get(sku) for sku in skus}
-    saved_counts = (stats.rows_imported, stats.rows_updated, stats.rows_skipped)
-
-    try:
-        _upsert_batch(conn, supplier_id, run_id, batch, existing_hashes, stats)
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        stats.rows_imported, stats.rows_updated, stats.rows_skipped = saved_counts
-        for sku, known in saved_hashes.items():
-            if known is None:
-                existing_hashes.pop(sku, None)
-            else:
-                existing_hashes[sku] = known
-
-        for item in batch:
-            sku = item["supplier_sku"]
-            before = (stats.rows_imported, stats.rows_updated, stats.rows_skipped)
-            known = existing_hashes.get(sku)
-            try:
-                _upsert_batch(conn, supplier_id, run_id, [item], existing_hashes, stats)
-                conn.commit()
-            except Exception as exc:
-                conn.rollback()
-                stats.rows_imported, stats.rows_updated, stats.rows_skipped = before
-                # The file repeats some SKUs, so a row left marked as written here
-                # would be skipped as unchanged when it turns up again.
-                if known is None:
-                    existing_hashes.pop(sku, None)
-                else:
-                    existing_hashes[sku] = known
-                stats.rows_errors += 1
-                stats.errors.append({"row": None, "error": f"{item['supplier_sku']}: {exc}"})
-                _log_error(
-                    conn, run_id, None, item["supplier_sku"], str(exc),
-                    {"supplier_sku": item["supplier_sku"], "barcode": item.get("barcode")},
-                )
-                conn.commit()
-    finally:
-        batch.clear()
-
-
 def _load_existing_hashes(conn: Connection, supplier_id: int, skus: list[str]) -> dict[str, str]:
     if not skus:
         return {}
@@ -617,7 +553,10 @@ def import_dekomo_csv(
 
             if len(batch) >= BATCH_SIZE:
                 batch_number += 1
-                _flush_batch(conn, supplier_id, run_id, batch, existing_hashes, stats)
+                flush_product_batch(
+                    conn, supplier_id, run_id, batch, existing_hashes, stats,
+                    upsert=_upsert_batch, load_hashes=_load_existing_hashes, log_error=_log_error,
+                )
 
                 if batch_number % PROGRESS_EVERY_BATCHES == 0:
                     db_count = _count_supplier_products(conn, supplier_id)
@@ -633,7 +572,10 @@ def import_dekomo_csv(
 
         if batch:
             batch_number += 1
-            _flush_batch(conn, supplier_id, run_id, batch, existing_hashes, stats)
+            flush_product_batch(
+                conn, supplier_id, run_id, batch, existing_hashes, stats,
+                upsert=_upsert_batch, load_hashes=_load_existing_hashes, log_error=_log_error,
+            )
             _report(
                 progress,
                 (

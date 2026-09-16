@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from pymysql.connections import Connection
 
@@ -329,3 +329,84 @@ def upsert_product_batch(
                 """,
                 [run_id, supplier_id, *unchanged_skus],
             )
+
+
+def flush_product_batch(
+    conn: Connection,
+    supplier_id: int,
+    run_id: int,
+    batch: list[dict[str, Any]],
+    existing_hashes: dict[str, str],
+    stats: ImportStats,
+    *,
+    upsert: Callable[..., None] = upsert_product_batch,
+    load_hashes: Callable[..., dict[str, str]] = load_existing_hashes,
+    log_error: Callable[..., None] = log_import_error,
+) -> None:
+    """Write a batch, isolating any row the database rejects. Always empties it.
+
+    Every importer used to clear its batch only after a successful write. So when
+    one row failed - an over-long barcode, a malformed value - every following
+    row appended to the same batch and retried the same doomed insert, for the
+    rest of the file. That stalled the Dekomo import three times at row 53,606
+    and logged 86,760 identical errors.
+
+    On failure the batch is retried row by row: the good rows still land and only
+    the bad ones are logged. The upsert updates the counters and the known-hash
+    map before it writes, so both are rolled back first - otherwise the retry
+    double-counts, and reads every row as already written and skips it. A row
+    that fails its own retry has its hash restored too, because files repeat
+    some SKUs and a second occurrence would otherwise be skipped as unchanged.
+
+    The upsert, hash loader and error logger are injectable because Dekomo keeps
+    its own copies of all three, with the same signatures.
+    """
+    try:
+        skus = [item["supplier_sku"] for item in batch]
+        existing_hashes.update(load_hashes(conn, supplier_id, skus))
+        saved_hashes = {sku: existing_hashes.get(sku) for sku in skus}
+        saved_counts = (stats.rows_imported, stats.rows_updated, stats.rows_skipped)
+
+        try:
+            upsert(conn, supplier_id, run_id, batch, existing_hashes, stats)
+            conn.commit()
+            return
+        except Exception:
+            conn.rollback()
+            stats.rows_imported, stats.rows_updated, stats.rows_skipped = saved_counts
+            _restore_hashes(existing_hashes, saved_hashes)
+
+        for item in batch:
+            sku = item["supplier_sku"]
+            before = (stats.rows_imported, stats.rows_updated, stats.rows_skipped)
+            known = existing_hashes.get(sku)
+            try:
+                upsert(conn, supplier_id, run_id, [item], existing_hashes, stats)
+                conn.commit()
+            except Exception as exc:
+                conn.rollback()
+                stats.rows_imported, stats.rows_updated, stats.rows_skipped = before
+                _restore_hashes(existing_hashes, {sku: known})
+                stats.rows_errors += 1
+                stats.errors.append(
+                    {"row": item.get("source_row_number"), "sku": sku, "error": str(exc)}
+                )
+                log_error(
+                    conn,
+                    run_id,
+                    item.get("source_row_number"),
+                    sku,
+                    str(exc),
+                    {"supplier_sku": sku, "barcode": item.get("barcode")},
+                )
+                conn.commit()
+    finally:
+        batch.clear()
+
+
+def _restore_hashes(existing_hashes: dict[str, str], saved: dict[str, str | None]) -> None:
+    for sku, known in saved.items():
+        if known is None:
+            existing_hashes.pop(sku, None)
+        else:
+            existing_hashes[sku] = known
