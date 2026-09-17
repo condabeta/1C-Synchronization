@@ -1,12 +1,20 @@
-"""Jazzway YML content feed (https://www.jazz-way.com/bitrix/catalog_export/export_all.xml).
+"""Jazzway YML content feed.
 
 The feed carries what the daily price XLSX does not: descriptions, the full
-picture set, specs and links to certificates. It does *not* carry usable prices
-(every offer is <price>1</price>) or stock, so the XLSX stays the source of
-truth for those.
+picture set and specs. It carries no usable price or stock, so the XLSX stays
+the source of truth for those.
 
-Offers are keyed by the "Код для заказа" param. That is the price file's
-"Артикул" without its leading dot - the feed has no vendorCode tag at all.
+Jazzway moved the site from Bitrix to OpenCart and the old export
+(/bitrix/catalog_export/export_all.xml) now answers 404. The feed lives at
+?route=extension/feed/yandex_yml instead, and covers 1,858 of the 2,845 priced
+articles rather than all of them.
+
+Offers are keyed by the price file's "Артикул" without its leading dot. The
+Bitrix feed spelled that as a "Код для заказа" param and had no vendorCode tag;
+the OpenCart one puts it in vendorCode. Both are read.
+
+The new feed does have <documents> and <certificates> tags, but they are empty on
+every offer, so it is still no source of conformity documents.
 """
 
 from __future__ import annotations
@@ -19,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-DEFAULT_FEED_URL = "https://www.jazz-way.com/bitrix/catalog_export/export_all.xml"
+DEFAULT_FEED_URL = "https://jazz-way.com/index.php?route=extension/feed/yandex_yml"
 USER_AGENT = "Mozilla/5.0 (compatible; SvetoyarImport/1.0)"
 FETCH_TIMEOUT = 120
 
@@ -118,7 +126,11 @@ def parse_feed(source: bytes | str | Path) -> dict[str, JazzwayContent]:
             if name and value:
                 params.setdefault(name, []).append(value)
 
-        order_code = params.get(ORDER_CODE_PARAM, [None])[0]
+        # The Bitrix feed carried the order code as a param and had no vendorCode
+        # tag at all. The OpenCart feed that replaced it puts the same number in
+        # vendorCode. Either way it is the price-file article without its leading
+        # dot, so both are read and the new one wins.
+        order_code = _clean(offer.findtext("vendorCode")) or params.get(ORDER_CODE_PARAM, [None])[0]
         if not order_code:
             continue
 

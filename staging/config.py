@@ -47,7 +47,7 @@ JAZZWAY_XLSX_DEFAULT = os.getenv(
 
 JAZZWAY_YML_URL = os.getenv(
     "JAZZWAY_YML_URL",
-    "https://www.jazz-way.com/bitrix/catalog_export/export_all.xml",
+    "https://jazz-way.com/index.php?route=extension/feed/yandex_yml",
 )
 
 VIASVET_XLSX_DEFAULT = os.getenv(
