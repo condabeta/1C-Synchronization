@@ -55,8 +55,8 @@ ALTER TABLE supplier_products
 -- -----------------------------------------------------------------------------
 
 INSERT INTO supplier_pricing_rules
-  (supplier_id, rule_name, match_type, match_value, base_field, coefficient, priority, notes)
-SELECT s.id, v.rule_name, v.match_type, v.match_value, v.base_field, v.coefficient, v.priority, v.notes
+  (supplier_id, rule_name, match_type, match_value, base_field, coefficient, round_to, priority, notes)
+SELECT s.id, v.rule_name, v.match_type, v.match_value, v.base_field, v.coefficient, 1.00, v.priority, v.notes
 FROM suppliers s
 JOIN (
   -- Salux / Svet NN: one coefficient for the whole price list.
@@ -84,13 +84,13 @@ JOIN (
   SELECT 'jazzway', 'БП для ленты x1.5', 'category', 'бп,', 'price', 1.5000, 15,
          'Раздел "4.6. БП, контроллеры, акс-ры для светодиодной ленты"'
   UNION ALL
-  SELECT 'jazzway', 'Лампы x1.35', 'category', 'ламп', 'price', 1.3500, 30,
+  SELECT 'jazzway', 'Лампы x1.5', 'category', 'ламп', 'price', 1.5000, 30,
          'Разделы "Лампы", "Настольные светодиодные лампы"'
   UNION ALL
-  SELECT 'jazzway', 'Светильники x1.25', 'category', 'светильник', 'price', 1.2500, 50,
+  SELECT 'jazzway', 'Светильники x1.5', 'category', 'светильник', 'price', 1.5000, 50,
          NULL
   UNION ALL
-  SELECT 'jazzway', 'Остальные категории x1.25', 'all', '', 'price', 1.2500, 100,
+  SELECT 'jazzway', 'Остальные категории x1.5', 'all', '', 'price', 1.5000, 100,
          NULL
   UNION ALL
 
