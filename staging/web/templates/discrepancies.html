@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block title %}Supplier changes · Svetoyar{% endblock %}
+
+{% macro value_cell(text) -%}
+  {%- if text is none or text == '' -%}
+    <span class="muted">—</span>
+  {%- elif text|length > 140 -%}
+    <details><summary>{{ text[:140] }}…</summary><div class="long-value">{{ text }}</div></details>
+  {%- else -%}
+    {{ text }}
+  {%- endif -%}
+{%- endmacro %}
+
+{% block content %}
+<h1>Supplier changes</h1>
+<p class="muted">
+  Protected fields keep your value when a price list is reloaded. What the supplier sent
+  instead waits here: accept it to replace your value, or reject it to keep yours.
+  A rejected value is not asked about again.
+</p>
+
+{% if resolved is not none %}
+<div class="card notice">
+  {{ 'Accepted' if resolved_action == 'accept' else 'Rejected' }}: {{ resolved }}.
+</div>
+{% endif %}
+
+<div class="filters">
+  {% for s in ['pending', 'accepted', 'rejected'] %}
+  <a class="{% if status == s %}active{% endif %}"
+     href="{{ url_for('discrepancy_list', status=s, supplier=supplier, field=field, search=search) }}">{{ s|capitalize }}</a>
+  {% endfor %}
+</div>
+
+<form method="get" class="search-form">
+  <input type="text" name="search" placeholder="Search by SKU or product name..." value="{{ search }}">
+  <select name="supplier">
+    <option value="">All suppliers</option>
+    {% for s in suppliers %}
+    <option value="{{ s.code }}" {% if supplier == s.code %}selected{% endif %}>{{ s.name }}</option>
+    {% endfor %}
+  </select>
+  <select name="field">
+    <option value="">All fields</option>
+    {% for f in fields %}
+    <option value="{{ f }}" {% if field == f %}selected{% endif %}>{{ f }}</option>
+    {% endfor %}
+  </select>
+  <input type="hidden" name="status" value="{{ status }}">
+  <button type="submit">Filter</button>
+  {% if search or supplier or field %}
+  <a href="{{ url_for('discrepancy_list', status=status) }}" class="btn btn-secondary">Clear</a>
+  {% endif %}
+</form>
+
+{% if status == 'pending' and total %}
+<div class="card">
+  <strong>All {{ total }} matching the filter</strong>
+  <p class="muted">Applies to every pending change the current filter shows, across all pages.</p>
+  <div class="actions">
+    {% for act, label, style in [('accept', 'Accept all ' ~ total, 'btn-ok'), ('reject', 'Reject all ' ~ total, 'btn-bad')] %}
+    <form method="post" action="{{ url_for('discrepancy_resolve') }}"
+          onsubmit="return confirm('{{ label }} changes matching the filter?');">
+      <input type="hidden" name="scope" value="filter">
+      <input type="hidden" name="action" value="{{ act }}">
+      <input type="hidden" name="supplier" value="{{ supplier }}">
+      <input type="hidden" name="field" value="{{ field }}">
+      <input type="hidden" name="search" value="{{ search }}">
+      <button class="btn {{ style }}" type="submit">{{ label }}</button>
+    </form>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<form method="post" action="{{ url_for('discrepancy_resolve') }}" id="selection-form">
+  <input type="hidden" name="scope" value="selected">
+  <input type="hidden" name="supplier" value="{{ supplier }}">
+  <input type="hidden" name="field" value="{{ field }}">
+  <input type="hidden" name="search" value="{{ search }}">
+
+  <div class="card">
+    <p class="muted">{{ total }} {{ status }}{% if supplier %} · {{ supplier }}{% endif %}{% if field %} · {{ field }}{% endif %}</p>
+
+    {% if status == 'pending' and items %}
+    <div class="actions" style="margin-bottom: 12px;">
+      <button class="btn btn-ok" type="submit" name="action" value="accept">Accept selected</button>
+      <button class="btn btn-bad" type="submit" name="action" value="reject">Reject selected</button>
+    </div>
+    {% endif %}
+
+    <table>
+      <thead>
+        <tr>
+          {% if status == 'pending' %}<th><input type="checkbox" id="select-all" title="Select all on this page"></th>{% endif %}
+          <th>Product</th>
+          <th>Supplier</th>
+          <th>Field</th>
+          <th>Your value</th>
+          <th>Supplier sent</th>
+          <th>{{ 'Detected' if status == 'pending' else 'Resolved' }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+        <tr>
+          {% if status == 'pending' %}<td><input type="checkbox" name="ids" value="{{ item.id }}" class="row-check"></td>{% endif %}
+          <td><strong>{{ item.product_name }}</strong><br><span class="muted">{{ item.internal_sku }}</span></td>
+          <td>{{ item.supplier_name }}</td>
+          <td><span class="badge">{{ item.field_name }}</span></td>
+          <td class="value">{{ value_cell(item.current_value) }}</td>
+          <td class="value supplier-value">{{ value_cell(item.supplier_value) }}</td>
+          <td class="muted">
+            {% if status == 'pending' %}{{ item.detected_at }}
+            {% else %}{{ item.resolved_at }}<br>{{ item.resolved_by or '' }}{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="muted">Nothing here.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    {% if pages > 1 %}
+    <div class="pager">
+      {% if page > 1 %}
+      <a class="btn btn-secondary" href="{{ url_for('discrepancy_list', status=status, supplier=supplier, field=field, search=search, page=page-1) }}">Prev</a>
+      {% endif %}
+      <span class="muted">Page {{ page }} / {{ pages }}</span>
+      {% if page < pages %}
+      <a class="btn btn-secondary" href="{{ url_for('discrepancy_list', status=status, supplier=supplier, field=field, search=search, page=page+1) }}">Next</a>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+</form>
+
+{% if summary %}
+<div class="card">
+  <h2>Pending by supplier and field</h2>
+  <table>
+    <thead><tr><th>Supplier</th><th>Field</th><th>Pending</th></tr></thead>
+    <tbody>
+      {% for row in summary %}
+      <tr>
+        <td>{{ row.supplier_name }}</td>
+        <td><span class="badge">{{ row.field_name }}</span></td>
+        <td><a href="{{ url_for('discrepancy_list', status='pending', supplier=row.supplier_code, field=row.field_name) }}">{{ row.cnt }}</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<style>
+  .notice { background: var(--ok-soft); border-color: var(--ok); }
+  td.value { max-width: 320px; word-break: break-word; }
+  td.supplier-value { background: #fffbeb; }
+  .long-value { white-space: pre-wrap; margin-top: 6px; }
+  details summary { cursor: pointer; }
+</style>
+
+<script>
+  const selectAll = document.getElementById('select-all');
+  if (selectAll) {
+    selectAll.addEventListener('change', () => {
+      document.querySelectorAll('.row-check').forEach(box => { box.checked = selectAll.checked; });
+    });
+  }
+  const selection = document.getElementById('selection-form');
+  if (selection) {
+    selection.addEventListener('submit', event => {
+      if (!document.querySelector('.row-check:checked')) {
+        event.preventDefault();
+        alert('Select at least one change first.');
+      }
+    });
+  }
+</script>
+{% endblock %}

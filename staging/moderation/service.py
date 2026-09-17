@@ -9,6 +9,7 @@ from typing import Any
 from pymysql.connections import Connection
 
 from staging.db import fetch_all, fetch_one
+from staging.moderation.discrepancies import record as record_discrepancy
 from staging.sync_config import should_sync_field
 
 
@@ -281,6 +282,13 @@ def _update_product_from_supplier(
         if not allowed:
             # Fill-if-empty: nothing to protect when the product field is blank.
             allowed = _empty(current.get(product_field)) and not _empty(value)
+            if not allowed:
+                # Protected and already filled: ours stays, but what the supplier
+                # sent goes to moderation instead of being dropped.
+                record_discrepancy(
+                    conn, product_id, supplier_id, supplier_field,
+                    current.get(product_field), value,
+                )
         if allowed:
             update_fields.append(f"{product_field} = %s")
             update_values.append(value)

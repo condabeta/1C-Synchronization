@@ -58,14 +58,33 @@ def _clean_statement(statement: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _line_comment_at(sql_text: str, index: int) -> bool:
+    """A MySQL "-- " comment: two dashes, then whitespace or the end of the text."""
+    if not sql_text.startswith("--", index):
+        return False
+    after = index + 2
+    return after == len(sql_text) or sql_text[after] in " \t\r\n"
+
+
 def split_sql_statements(sql_text: str) -> list[str]:
+    """Split a SQL script on its top-level semicolons.
+
+    Comments are skipped while scanning rather than stripped afterwards. A
+    comment is prose, and prose has apostrophes and semicolons: "the manager's
+    edits" used to open a string that never closed, gluing every statement after
+    it into one and failing the migration. That broke four migrations before this.
+    """
     statements: list[str] = []
     buffer: list[str] = []
     in_single = False
     in_double = False
     escape = False
+    index = 0
 
-    for char in sql_text:
+    while index < len(sql_text):
+        char = sql_text[index]
+        index += 1
+
         if escape:
             buffer.append(char)
             escape = False
@@ -74,6 +93,11 @@ def split_sql_statements(sql_text: str) -> list[str]:
         if char == "\\":
             buffer.append(char)
             escape = True
+            continue
+
+        if not in_single and not in_double and _line_comment_at(sql_text, index - 1):
+            newline = sql_text.find("\n", index)
+            index = len(sql_text) if newline == -1 else newline
             continue
 
         if char == "'" and not in_double:

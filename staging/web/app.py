@@ -9,8 +9,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from staging.db import db_session
+from staging.db import db_session, fetch_all
 from staging.config import VIASVET_PHOTOS_DIR
+from staging.moderation.discrepancies import (
+    PRODUCT_FIELDS,
+    STATUSES,
+    list_discrepancies,
+    pending_summary,
+    resolve as resolve_discrepancies,
+)
 from staging.moderation.service import (
     approve_queue_item,
     enqueue_supplier_products,
@@ -47,7 +54,76 @@ def create_app() -> Flask:
     def dashboard():
         with db_session() as conn:
             stats = get_dashboard_stats(conn)
+            stats["discrepancies_pending"] = sum(row["cnt"] for row in pending_summary(conn))
         return render_template("dashboard.html", stats=stats)
+
+    def _discrepancy_filters(source) -> dict:
+        """Filters from a request, with anything unknown dropped rather than trusted."""
+        field = source.get("field") or None
+        return {
+            "supplier_code": source.get("supplier") or None,
+            "field_name": field if field in PRODUCT_FIELDS else None,
+            "search": (source.get("search") or "").strip() or None,
+        }
+
+    @app.route("/discrepancies")
+    def discrepancy_list():
+        status = request.args.get("status", "pending")
+        status = status if status in STATUSES else "pending"
+        filters = _discrepancy_filters(request.args)
+        try:
+            page = max(int(request.args.get("page", 1)), 1)
+        except ValueError:
+            page = 1
+        per_page = 50
+
+        with db_session() as conn:
+            items, total = list_discrepancies(conn, status=status, page=page, per_page=per_page, **filters)
+            summary = pending_summary(conn)
+            suppliers = fetch_all(conn, "SELECT code, name FROM suppliers ORDER BY name")
+
+        return render_template(
+            "discrepancies.html",
+            items=items,
+            total=total,
+            status=status,
+            supplier=filters["supplier_code"] or "",
+            field=filters["field_name"] or "",
+            search=filters["search"] or "",
+            page=page,
+            pages=max((total + per_page - 1) // per_page, 1),
+            summary=summary,
+            suppliers=suppliers,
+            fields=list(PRODUCT_FIELDS),
+            resolved=request.args.get("resolved"),
+            resolved_action=request.args.get("action"),
+        )
+
+    @app.post("/discrepancies/resolve")
+    def discrepancy_resolve():
+        action = request.form.get("action")
+        if action not in ("accept", "reject"):
+            abort(400)
+        reviewer = request.form.get("reviewer", "moderator").strip() or "moderator"
+        filters = _discrepancy_filters(request.form)
+
+        with db_session() as conn:
+            if request.form.get("scope") == "filter":
+                # Everything pending that matches the filters on screen.
+                count = resolve_discrepancies(conn, action=action, reviewer=reviewer, **filters)
+            else:
+                ids = [int(value) for value in request.form.getlist("ids") if value.isdigit()]
+                count = resolve_discrepancies(conn, action=action, reviewer=reviewer, ids=ids)
+
+        return redirect(url_for(
+            "discrepancy_list",
+            status="pending",
+            supplier=filters["supplier_code"] or "",
+            field=filters["field_name"] or "",
+            search=filters["search"] or "",
+            resolved=count,
+            action=action,
+        ))
 
     @app.route("/queue")
     def queue_list():

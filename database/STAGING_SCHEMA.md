@@ -41,6 +41,7 @@ suppliers + supplier_sources
 | `supplier_field_sync_config` | Which fields a supplier import may overwrite |
 | `certificates` | Conformity documents: declarations, certificates, refusal letters, with registry and scan links |
 | `product_certificates` | Which products each document covers, by supplier and article |
+| `field_discrepancies` | Supplier values a protected field turned away, for a manager to accept or reject |
 | `own_articles` | Svetoyar's own articles and names for Salux-made goods |
 | `sync_outbox` | Queue for 1C and OpenCart sync |
 
