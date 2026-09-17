@@ -42,7 +42,7 @@ DEKOMO_CSV_DEFAULT = DEKOMO_CSV_PATH
 
 JAZZWAY_XLSX_DEFAULT = os.getenv(
     "JAZZWAY_XLSX_PATH",
-    r"D:\projects\1C\Джазвея\11.08 Остатки для клиента.xlsx",
+    r"D:\projects\1C\Джазвея\17.09 Остатки для клиента.xlsx",
 )
 
 JAZZWAY_YML_URL = os.getenv(
@@ -75,7 +75,7 @@ SALUX_XLSX_DEFAULT = os.getenv(
 # not a supplier feed. Still filed under the ViaSvet folder, where it arrived.
 OWN_PRICE_XLSX_DEFAULT = os.getenv(
     "OWN_PRICE_XLSX_PATH",
-    r"D:\projects\1C\Виа Свет\светнн1.xlsx",
+    r"D:\projects\1C\Виа Свет\светнн1 (3).xlsx",
 )
 
 # Arlight ships two files: an XML with photos, barcodes and customs codes, and
