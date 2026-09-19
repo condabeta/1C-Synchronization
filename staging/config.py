@@ -83,12 +83,12 @@ OWN_PRICE_XLSX_DEFAULT = os.getenv(
 # corrected descriptions the client asked for.
 ARLIGHT_XML_DEFAULT = os.getenv(
     "ARLIGHT_XML_PATH",
-    r"D:\projectsC\Арлайт\products.xml",
+    r"D:\projects\1C\Арлайт\products.xml",
 )
 
 ARLIGHT_XLSX_DEFAULT = os.getenv(
     "ARLIGHT_XLSX_PATH",
-    r"D:\projectsC\Арлайт\Прайс Арлайт.xlsx",
+    r"D:\projects\1C\Арлайт\Прайс Арлайт.xlsx",
 )
 
 # SWG's export URL embeds a private token - anyone holding it can pull their
