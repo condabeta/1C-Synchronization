@@ -62,18 +62,16 @@ pip install -r requirements.txt
    python scripts/setup_database.py
    ```
 
-3. **Apply the migrations** in `database/`, in this order:
+   This also applies the migrations. On an existing database, apply any new
+   ones with:
 
    ```
-   mysql -u root -p svetoyar_staging < database/add_sync_protection.sql
-   mysql -u root -p svetoyar_staging < database/fix_integrity_2026_09.sql
-   mysql -u root -p svetoyar_staging < database/add_content_attribution.sql
-   mysql -u root -p svetoyar_staging < database/add_pricing_rules.sql
-   mysql -u root -p svetoyar_staging < database/add_salux.sql
-   mysql -u root -p svetoyar_staging < database/add_own_articles.sql
-   mysql -u root -p svetoyar_staging < database/add_certificates.sql
-   mysql -u root -p svetoyar_staging < database/add_field_discrepancies.sql
+   python scripts/migrate.py --status
+   python scripts/migrate.py
    ```
+
+   `schema_migrations` records what has run, with a checksum, so a migration is
+   never applied twice and an edited one is reported instead of re-run.
 
 ## Usage
 
@@ -106,6 +104,38 @@ python scripts/recalc_prices.py --supplier jazzway
 
 The current rules and how a rule is chosen for a product are in
 [docs/pricing_rules.md](docs/pricing_rules.md).
+
+### Categories
+
+The site's own category tree, and the rules mapping each supplier's sections
+into it, are in `staging/categories.py`:
+
+```
+python scripts/build_categories.py --dry-run
+python scripts/build_categories.py --unmapped
+```
+
+### Catalogue prices
+
+Imports write supplier rows; this pushes the figures a supplier owns through to
+the catalogue, leaving fields a manager has edited alone:
+
+```
+python scripts/refresh_catalogue.py --dry-run
+python scripts/refresh_catalogue.py
+```
+
+A price that moved by more than 5x is reported rather than applied.
+
+### Publishing to 1C
+
+```
+python scripts/prepare_publishing.py            # slugs, GUIDs, meta titles
+python scripts/prepare_publishing.py --export   # write import.xml / offers.xml
+```
+
+1C connects to `/1c_exchange` on our side; see
+[docs/publishing.md](docs/publishing.md).
 
 ### Certificates
 
@@ -177,10 +207,20 @@ Done:
 - Detection of products that dropped out of a supplier's latest price list
   (`last_import_run_id`).
 
+- Category tree, and every product placed in it.
+- Slugs and 1C GUIDs for the whole catalogue.
+- CommerceML export and the exchange endpoint 1C connects to.
+
 Not built yet:
 
-- **1C Fresh / OpenCart sync** (`sync_outbox` is filled but nothing consumes
-  it). This needs site access and the 1C exchange endpoint from the client.
+- **Loading a catalogue back from 1C.** The endpoint accepts and keeps the
+  file; whether to read it in depends on which side owns the catalogue, which
+  the client has not decided.
+- **OpenCart export.** Needs the site access to build against.
+- **Images are hotlinks.** All 459,134 `product_images.stored_path` are empty -
+  nothing has been downloaded, so the catalogue's pictures depend on the
+  suppliers' own servers.
+- **Orders.** No orders or customers tables; `type=sale` is refused.
 - **Retired products.** What happens to products a supplier stops listing
   (hide them automatically, or flag them for a manager) is still undecided.
 - **Salux mapping.** Our own articles are not yet applied to Salux products,

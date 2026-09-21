@@ -47,6 +47,10 @@ def create_app() -> Flask:
     app = Flask(__name__, template_folder=str(TEMPLATE_DIR))
     app.secret_key = "svetoyar-staging-moderation-dev"
 
+    from staging.web.exchange import bp as exchange_bp
+
+    app.register_blueprint(exchange_bp)
+
     allowed_roots = [
         Path(VIASVET_PHOTOS_DIR).resolve(),
     ]

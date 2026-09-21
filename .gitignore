@@ -5,3 +5,6 @@ config.env
 
 # downloaded feed dumps
 *.xml
+
+# generated CommerceML files
+exchange/

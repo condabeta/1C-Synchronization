@@ -51,6 +51,7 @@ MIGRATIONS = [
     "add_own_articles.sql",
     "add_certificates.sql",
     "add_field_discrepancies.sql",
+    "add_publishing_fields.sql",
 ]
 
 TRACKING_TABLE = """

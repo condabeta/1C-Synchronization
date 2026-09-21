@@ -95,4 +95,11 @@ ARLIGHT_XLSX_DEFAULT = os.getenv(
 # whole price feed. It lives in config.env (gitignored), never in the source.
 SWG_YML_URL = os.getenv("SWG_YML_URL", "")
 
+# The 1C exchange endpoint. 1C is the client and the site is the server, so
+# these are the credentials 1C will be given, not ones we use elsewhere. With
+# either unset the endpoint refuses every request instead of guessing.
+ONEC_EXCHANGE_USER = os.getenv("ONEC_EXCHANGE_USER", "")
+ONEC_EXCHANGE_PASSWORD = os.getenv("ONEC_EXCHANGE_PASSWORD", "")
+ONEC_EXCHANGE_DIR = os.getenv("ONEC_EXCHANGE_DIR", str(PROJECT_ROOT / "exchange"))
+
 SCHEMA_FILE = PROJECT_ROOT / "database" / "staging_schema.sql"
