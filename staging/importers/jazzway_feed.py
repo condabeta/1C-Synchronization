@@ -97,6 +97,31 @@ def _is_image_url(value: str | None) -> bool:
     return "." in path.rsplit("/", 1)[-1]
 
 
+# The feed's <description> is a specification list written as prose, with
+# <br /> between lines. Two of those lines are ours, not the customer's: the
+# order code we buy by, and the barcode. 1,961 of 1,973 descriptions ended with
+# "Код для заказа: 5054578<br />Штрих-код: 4895…" - our supplier's internal
+# numbering, on a public product page.
+INTERNAL_DESCRIPTION_LINES = ("код для заказа", "штрих-код", "штрихкод")
+BR_RE = re.compile(r"<br\s*/?>", re.I)
+
+
+def clean_description(text: str | None) -> str | None:
+    """The description without the lines meant for us rather than a customer."""
+    if not text:
+        return None
+    lines = []
+    for raw in BR_RE.split(text):
+        line = " ".join(raw.split())
+        if not line:
+            continue
+        head = line.split(":", 1)[0].strip().lower()
+        if head in INTERNAL_DESCRIPTION_LINES:
+            continue
+        lines.append(line)
+    return "\n".join(lines) or None
+
+
 def _clean(value: Any) -> str | None:
     if value is None:
         return None
@@ -162,7 +187,7 @@ def parse_feed(source: bytes | str | Path) -> dict[str, JazzwayContent]:
             offer_id=offer.get("id"),
             article=params.get(ARTICLE_PARAM, [None])[0],
             name=_clean(offer.findtext("name")),
-            description=_clean(offer.findtext("description")),
+            description=clean_description(_clean(offer.findtext("description"))),
             product_url=_clean(offer.findtext("url")),
             barcode=params.get(BARCODE_PARAM, [None])[0],
             category=category_names.get(category_id or ""),

@@ -110,39 +110,13 @@ def _has_pending_queue(conn: Connection, product_id: int) -> bool:
     return row is not None
 
 
-def _create_product_from_supplier(conn: Connection, row: dict[str, Any]) -> int:
-    attrs = _parse_attrs(row.get("attributes_json"))
-    description = row.get("description") or attrs.get("description")
-    internal = _internal_sku(row["supplier_code"], row["supplier_sku"])
+def _link_supplier_product(conn: Connection, product_id: int, row: dict[str, Any]) -> None:
+    """Point a supplier row at a catalogue row, and carry its offer and images.
 
+    Shared by the two ways a supplier row reaches the catalogue: a product
+    created for it, or an existing one adopted.
+    """
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO products (
-                internal_sku, name, brand, description, status, moderation_required,
-                primary_supplier_id, price, price_old, price_retail, stock_qty,
-                is_available, content_hash
-            ) VALUES (
-                %s, %s, %s, %s, 'pending_moderation', 1,
-                %s, %s, %s, %s, %s,
-                COALESCE(%s, 0), %s
-            )
-            """,
-            (
-                internal,
-                row.get("name") or row["supplier_sku"],
-                row.get("brand"),
-                description,
-                row["supplier_id"],
-                row.get("price"),
-                row.get("price_old"),
-                row.get("price_retail"),
-                row.get("stock_qty"),
-                row.get("is_available"),
-                row.get("content_hash"),
-            ),
-        )
-        product_id = int(cur.lastrowid)
 
         cur.execute(
             """
@@ -193,10 +167,86 @@ def _create_product_from_supplier(conn: Connection, row: dict[str, Any]) -> int:
             ),
         )
 
+
     _sync_product_images(conn, product_id, row["supplier_id"], _parse_images(row.get("images_json")))
 
+
+def _create_product_from_supplier(conn: Connection, row: dict[str, Any]) -> int:
+    attrs = _parse_attrs(row.get("attributes_json"))
+    description = row.get("description") or attrs.get("description")
+    internal = _internal_sku(row["supplier_code"], row["supplier_sku"])
+
+    # A catalogue row for this article may already exist while the supplier row
+    # points at nothing: that is what the 683 "ghost" products are - their link
+    # was deleted and the supplier row came back later as unmatched. Inserting
+    # again raises a duplicate key and rolls back the whole run, so the existing
+    # row is adopted instead.
+    existing = fetch_one(conn, "SELECT id FROM products WHERE internal_sku = %s", (internal,))
+    if existing:
+        product_id = int(existing["id"])
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE products SET primary_supplier_id = COALESCE(primary_supplier_id, %s),
+                                    updated_at = NOW()
+                WHERE id = %s
+                """,
+                (row["supplier_id"], product_id),
+            )
+        _link_supplier_product(conn, product_id, row)
+        return product_id
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO products (
+                internal_sku, name, brand, description, status, moderation_required,
+                primary_supplier_id, price, price_old, price_retail, stock_qty,
+                is_available, barcode, category_id, content_hash
+            ) VALUES (
+                %s, %s, %s, %s, 'pending_moderation', 1,
+                %s, %s, %s, %s, %s,
+                COALESCE(%s, 0), %s,
+                -- the tree the supplier's section maps to, if it maps to one
+                (SELECT category_id FROM supplier_category_map
+                  WHERE supplier_id = %s
+                    AND supplier_category = COALESCE(%s, %s, '') LIMIT 1),
+                %s
+            )
+            """,
+            (
+                internal,
+                row.get("name") or row["supplier_sku"],
+                row.get("brand"),
+                description,
+                row["supplier_id"],
+                row.get("price"),
+                row.get("price_old"),
+                row.get("price_retail"),
+                row.get("stock_qty"),
+                row.get("is_available"),
+                # Neither was carried over before: the catalogue had no barcode
+                # at all, and no category until one was assigned in a later pass.
+                row.get("barcode"),
+                row["supplier_id"],
+                row.get("supplier_category_path"),
+                row.get("supplier_category"),
+                row.get("content_hash"),
+            ),
+        )
+        product_id = int(cur.lastrowid)
+
+    _link_supplier_product(conn, product_id, row)
     _record_status(conn, product_id, None, "pending_moderation", "system", "Created from supplier import")
     return product_id
+
+
+_JUNK_IMAGE = {"nan", "none", "null", "-", "0", "false"}
+
+
+def _usable_image(value: Any) -> bool:
+    text = (value or "").strip()
+    return bool(text) and text.lower() not in _JUNK_IMAGE
 
 
 def _sync_product_images(
@@ -210,6 +260,9 @@ def _sync_product_images(
     Existing rows are left alone, so a manually curated gallery keeps its order
     and any image added by hand survives.
     """
+    # "nan" is a pandas empty cell that reached the feed as text. 121 products
+    # had it as their *main* image, so their page led with a broken picture.
+    images = [image for image in images if _usable_image(image)]
     if not images:
         return 0
 
@@ -421,6 +474,7 @@ def enqueue_supplier_products(
             sp.id, sp.supplier_id, sp.import_run_id, sp.supplier_sku, sp.name, sp.brand,
             sp.description, sp.price, sp.price_old, sp.price_retail, sp.stock_qty,
             sp.is_available, sp.images_json, sp.attributes_json, sp.content_hash,
+            sp.barcode, sp.supplier_category, sp.supplier_category_path,
             sp.product_id, sp.is_new, sp.is_changed,
             s.code AS supplier_code
         FROM supplier_products sp

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
@@ -112,6 +113,22 @@ def parse_excel_price(excel_path: str) -> dict[str, dict[str, Any]]:
     return price_data
 
 
+# "Лента COB-X360-8mm 5V White6000 (Arlight, IP20 2-5м)" - Arlight writes the
+# brand at the head of the trailing parentheses. The XML's <brand> is a numeric
+# id (18,138 of 19,451 products are brand "4") and the feed ships no dictionary
+# for it, so every card would have shown "4" as its manufacturer.
+BRAND_IN_NAME_RE = re.compile(r"\(([^(),]{2,40})[,)]")
+
+
+def brand_from_name(name: str | None) -> str | None:
+    matches = BRAND_IN_NAME_RE.findall(name or "")
+    for candidate in reversed(matches):  # the brand group is the last one
+        text = candidate.strip()
+        if text and not text.isdigit():
+            return text
+    return None
+
+
 def parse_xml_products(xml_path: str) -> list[dict[str, Any]]:
     """Parse XML products file."""
     _report(None, f"Parsing XML products file: {xml_path}")
@@ -147,7 +164,7 @@ def parse_xml_products(xml_path: str) -> list[dict[str, Any]]:
             "supplier_sku": article,
             "supplier_sku_raw": article,
             "name": clean(product_elem.findtext("name")),
-            "brand": clean(product_elem.findtext("brand")),
+            "brand": brand_from_name(clean(product_elem.findtext("name"))),
             "manufacturer_code": article,
             "ean13": clean(product_elem.findtext("ean13")),
             "warranty": clean(product_elem.findtext("warranty")),
