@@ -71,6 +71,13 @@ SALUX_XLSX_DEFAULT = os.getenv(
     r"D:\projects\1C\Салюкс\Прайс_лист_Дистрибьютор_Июнь_2026_Салюкс.xlsx",
 )
 
+# Where the pictures embedded in the Salux price workbook are written. They are
+# the only photos that exist for the series the supplier's site has no page for.
+SALUX_IMAGES_DIR = os.getenv(
+    "SALUX_IMAGES_DIR",
+    r"D:\projects\1C\Салюкс\Фото из прайса",
+)
+
 # Svetoyar's own price list for Salux-made goods - our articles and our names,
 # not a supplier feed. Still filed under the ViaSvet folder, where it arrived.
 OWN_PRICE_XLSX_DEFAULT = os.getenv(

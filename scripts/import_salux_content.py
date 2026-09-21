@@ -1,13 +1,20 @@
 #!/usr/bin/env python
-"""Fill Salux products with photos and descriptions from stz-salux.ru.
+"""Fill Salux products with photos and descriptions.
 
-Salux exports neither, and their site is the only source they have. The site
-publishes one page per series, so every article of a series gets that series'
-description and photo set - which is what the series is: the same luminaire in
-different wattages.
+Salux exports neither. There are two sources, and this uses both:
 
-    python scripts/import_salux_content.py --dry-run   # crawl and match only
+* **Their site**, which publishes one page per series - a description and a
+  photo set that cover every wattage in that series.
+* **The price workbook**, which has pictures embedded in its «Изображение»
+  column, one per block. That is the only source for the series the site has no
+  page for: «ССдО Линия», the КСдУ complexes and the Ex fittings.
+
+The site wins where it has something, because a product page carries a
+description too. The workbook fills the rest.
+
+    python scripts/import_salux_content.py --dry-run   # match only
     python scripts/import_salux_content.py             # write to the DB
+    python scripts/import_salux_content.py --no-price-images   # site only
 
 Only the price rows are touched. Content flows on to the catalogue through
 moderation as usual.
@@ -27,7 +34,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from staging.config import SALUX_IMAGES_DIR, SALUX_XLSX_DEFAULT
 from staging.db import db_session, fetch_all
+from staging.importers.salux_images import match_images, save_images
 from staging.importers.salux_site import (
     ATTRIBUTION,
     DEFAULT_DELAY,
@@ -40,7 +49,7 @@ from staging.importers.salux_site import (
 SUPPLIER_CODE = "salux"
 
 SELECT_SQL = """
-    SELECT sp.id, sp.supplier_sku, sp.name, sp.description, sp.images_json,
+    SELECT sp.id, sp.supplier_sku, sp.name, sp.description, sp.images_json, sp.product_url,
            sp.attributes_json->>'$.sheet' AS sheet
     FROM supplier_products sp
     JOIN suppliers s ON s.id = sp.supplier_id
@@ -70,6 +79,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--delay", type=float, default=DEFAULT_DELAY, help="Pause between requests")
     parser.add_argument("--cache", type=Path, help="Read/write the crawl as JSON instead of refetching")
     parser.add_argument("--quiet", action="store_true", help="Do not print each page as it is fetched")
+    parser.add_argument("--no-price-images", action="store_true",
+                        help="Do not fall back to the pictures embedded in the price workbook")
+    parser.add_argument("--images-dir", type=Path, default=Path(SALUX_IMAGES_DIR),
+                        help="Where to write the pictures taken out of the workbook")
     return parser.parse_args()
 
 
@@ -127,6 +140,30 @@ def main() -> int:
                 f"Товаров Салюкса: {len(rows)} | сопоставлено со страницей: {len(updates)} | "
                 f"без страницы: {len(rows) - len(updates)} | фото проставлено: {photos:,}"
             )
+
+            # The site has no page for «ССдО Линия», the КСдУ complexes or the
+            # Ex fittings, but the price workbook has a picture for every block
+            # in it - which the client pointed out. Used only where the site
+            # gave nothing, so a real product page still wins.
+            from_price = 0
+            if not args.no_price_images:
+                blocks, orphans = match_images(Path(SALUX_XLSX_DEFAULT))
+                per_sku = save_images(blocks, args.images_dir)
+                covered = {row_id for *_, row_id in updates}
+                for row in rows:
+                    if row["id"] in covered:
+                        continue
+                    paths = per_sku.get(row["supplier_sku"])
+                    if not paths:
+                        continue
+                    updates.append((row["description"], json.dumps(paths, ensure_ascii=False),
+                                    row.get("product_url"), row["id"]))
+                    from_price += 1
+                print(
+                    f"Фото из прайса: {sum(len(block.images) for block in blocks)} картинок в "
+                    f"{len([b for b in blocks if b.images])} блоках | добавлено товарам: {from_price}"
+                    + (f" | не привязано: {len(orphans)}" if orphans else "")
+                )
             if missing:
                 print("Без страницы на сайте:")
                 for name, count in missing.most_common(15):

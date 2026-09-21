@@ -66,3 +66,8 @@ Technical notes:
 - The site publishes **one page per series**, not per article: 56 pages, 54
   series, 228 photos. A series page covers every wattage in that series.
 - The crawl is one pass with a 0.5 s delay - about a minute for the catalogue.
+- The price workbook itself carries 91 pictures, embedded in its «Изображение»
+  column, one per block of articles (Юлия, 21 Sep 2026). Those cover the series
+  the site has no page for - «ССдО Линия», the КСдУ complexes, the Ex fittings -
+  and raise no permission question at all: the file was sent to us to work from.
+  They are extracted to `SALUX_IMAGES_DIR` and used where the site gave nothing.
