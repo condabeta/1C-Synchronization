@@ -280,11 +280,15 @@ def _update_product_from_supplier(
         "is_available": "is_available",
     }
 
+    columns = sorted(set(field_mappings.values()))
     current = fetch_one(
         conn,
-        f"SELECT {', '.join(sorted(set(field_mappings.values())))} FROM products WHERE id = %s",
+        f"SELECT {', '.join(columns)}, sync_override_enabled FROM products WHERE id = %s",
         (product_id,),
     ) or {}
+    # Read once, with the row we are already fetching, instead of once per
+    # field: this ran nine extra SELECTs for every supplier row processed.
+    override = bool(current.get("sync_override_enabled"))
 
     def _empty(value: Any) -> bool:
         return value is None or (isinstance(value, str) and not value.strip())
@@ -293,7 +297,7 @@ def _update_product_from_supplier(
         if supplier_field not in supplier_data:
             continue
         value = supplier_data[supplier_field]
-        allowed = should_sync_field(conn, supplier_id, supplier_field, product_id)
+        allowed = override or should_sync_field(conn, supplier_id, supplier_field)
         if not allowed:
             # Fill-if-empty: nothing to protect when the product field is blank.
             allowed = _empty(current.get(product_field)) and not _empty(value)

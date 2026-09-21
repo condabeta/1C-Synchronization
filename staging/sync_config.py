@@ -6,11 +6,25 @@ from pymysql.connections import Connection
 from staging.db import fetch_all, fetch_one
 
 
-def get_sync_config(conn: Connection, supplier_id: int) -> dict[str, bool]:
+# One row per supplier and field, changed by hand and almost never. It was being
+# re-read for every field of every product: 16 queries per supplier row, ~4.5M
+# statements over the 167,000-row queue. Cached per process; call reset_cache()
+# after changing the table.
+_CONFIG_CACHE: dict[int, dict[str, bool]] = {}
+
+
+def reset_cache() -> None:
+    _CONFIG_CACHE.clear()
+
+
+def get_sync_config(conn: Connection, supplier_id: int, *, use_cache: bool = True) -> dict[str, bool]:
     """
     Get sync configuration for a supplier.
     Returns dict mapping field_name -> sync_enabled (True if sync from supplier, False if manual-only).
     """
+    if use_cache and supplier_id in _CONFIG_CACHE:
+        return _CONFIG_CACHE[supplier_id]
+
     rows = fetch_all(
         conn,
         """
@@ -20,7 +34,10 @@ def get_sync_config(conn: Connection, supplier_id: int) -> dict[str, bool]:
         """,
         (supplier_id,),
     )
-    return {row["field_name"]: bool(row["sync_enabled"]) for row in rows}
+    config = {row["field_name"]: bool(row["sync_enabled"]) for row in rows}
+    if use_cache:
+        _CONFIG_CACHE[supplier_id] = config
+    return config
 
 
 def should_sync_field(conn: Connection, supplier_id: int, field_name: str, product_id: int | None = None) -> bool:
