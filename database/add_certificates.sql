@@ -2,13 +2,13 @@
 --
 -- The client needs registry links on product pages - a declaration or
 -- certificate that can be checked against the official register. Three
--- suppliers publish registries: Arlight, LED Crystal and Salux. Dekomo, Jazzway,
+-- suppliers publish registries: Arlight, Jazzway, LED Crystal and Salux. Dekomo,
 -- SWG and ViaSvet do not, so their products get no documents from this.
 --
--- The registries bind documents to products in two different ways. Arlight
--- lists every document against explicit article numbers. LED Crystal and Salux
--- publish documents by series, in prose, so their products are matched through
--- curated rules in staging/certificates.py instead.
+-- The registries bind documents to products in two different ways. Arlight and
+-- Jazzway list every document against explicit article numbers. LED Crystal and
+-- Salux publish documents by series, in prose, so their products are matched
+-- through curated rules in staging/certificates.py instead.
 --
 -- A link is stored by supplier and article rather than by supplier_products.id,
 -- because supplier rows are rewritten on every import and the article is what

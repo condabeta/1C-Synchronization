@@ -4,7 +4,7 @@ The site needs a registry link on each product page - a declaration or
 certificate that can be checked in the official register. Three suppliers
 publish registries, and they bind documents to products in two ways:
 
-* Arlight lists every document against explicit article numbers - 36,635 links.
+* Arlight and Jazzway list every document against explicit article numbers.
   Those are loaded as they are.
 * LED Crystal and Salux publish documents by series, in prose: "серии LB, LT",
   "ССдВз 1Ex 01; ССдВз 1Ex 02 db". There are only 17 such documents, so they are
@@ -13,7 +13,7 @@ publish registries, and they bind documents to products in two ways:
   registry warns that binding by series needs an article-to-series table from the
   supplier, so every series link is marked as such and can be audited.
 
-Dekomo, Jazzway, SWG and ViaSvet publish nothing usable, so their products get no
+Dekomo, SWG and ViaSvet publish nothing usable, so their products get no
 documents here.
 """
 
@@ -29,13 +29,19 @@ import pandas as pd
 from pymysql.connections import Connection
 
 from staging.db import fetch_all, fetch_one
+from staging.importers.jazzway_feed import order_code_for
 from staging.pricing import fold
 
 ARLIGHT_REGISTRY = r"D:\projects\1C\Арлайт\Reestr_dokumentov_sootvetstviya_Svetoyar.xlsx"
 CRYSTAL_REGISTRY = r"D:\projects\1C\crystal\Реестр_сертификатов_LED_CRYSTAL(2).xlsx"
 SALUX_REGISTRY = r"D:\projects\1C\Салюкс\Реестр_сертификатов_Салюкс_обновлён.xlsx"
+JAZZWAY_REGISTRY = r"D:\projects\1C\Джазвея\Джаз-Вей - Сертификаты номенклатуры.xlsx"
 
-OFFICIAL_REGISTRY_HOSTS = ("pub.fsa.gov.ru", "rivreg.ru")
+# nsopb.ru is the register of the voluntary fire-safety certification system, and
+# nsi.eaeunion.org the EAEU register that holds state registration certificates.
+# Both are the issuing body's own register, which is what a customer needs to be
+# able to check - they are just not the FSA one.
+OFFICIAL_REGISTRY_HOSTS = ("pub.fsa.gov.ru", "rivreg.ru", "nsopb.ru", "nsi.eaeunion.org")
 LINK_INSERT_CHUNK = 2000
 
 
@@ -107,6 +113,13 @@ def _kind(label: str | None) -> str:
         return "quality_system"
     if "отказн" in text:
         return "refusal_letter"
+    # Jazzway's labels. ДСС is a voluntary certificate issued by a private
+    # system - fire safety, emergency lighting, schools. СГР is a state
+    # registration certificate, which approves rather than certifies.
+    if text.startswith("дсс"):
+        return "voluntary"
+    if text == "сгр":
+        return "approval"
     if "добровол" in text:
         return "voluntary"
     if "декларац" in text:
@@ -196,6 +209,86 @@ def load_arlight(path: str = ARLIGHT_REGISTRY) -> tuple[list[Certificate], list[
         for code, sku in zip(links["ID документа"], links["Артикул поставщика"])
         if isinstance(code, str) and isinstance(sku, str) and code.strip() and sku.strip()
     ]
+    return certificates, pairs
+
+
+# --- Jazzway ---------------------------------------------------------------
+
+JAZZWAY_SHEET = "TDSheet"
+JAZZWAY_HEADER = "Артикул (РМ)"
+
+
+def load_jazzway(path: str = JAZZWAY_REGISTRY) -> tuple[list[Certificate], list[tuple[str, str]]]:
+    """Documents, and (document code, article) links.
+
+    The file is a 1C report: one row per article and document, the article
+    written once and left blank on the rows that follow it. The same document
+    therefore appears on hundreds of rows; it is collapsed here by its number,
+    which the registry spells consistently - no document number carries two
+    different types or dates.
+
+    Documents have no code of their own, so they are numbered JAZ-001 upwards in
+    order of document number. Sorting keeps the numbering the same between runs
+    as long as the set of documents is.
+    """
+    frame = pd.read_excel(path, sheet_name=JAZZWAY_SHEET, header=None, engine="openpyxl")
+    header_index = _header_row(frame, JAZZWAY_HEADER)
+    headers = [_text(cell) or f"col{i}" for i, cell in enumerate(frame.iloc[header_index])]
+
+    rows: list[dict[str, Any]] = []
+    article: str | None = None
+    for index in range(header_index + 1, len(frame)):
+        row = dict(zip(headers, frame.iloc[index].tolist()))
+        article = _text(row.get(JAZZWAY_HEADER)) or article
+        number = _text(row.get("Сертификат.Номер"))
+        if article and number:  # an article with no document at all is just skipped
+            rows.append({**row, "article": article, "number": number})
+
+    codes: dict[str, str] = {
+        number: f"JAZ-{position:03d}"
+        for position, number in enumerate(sorted({row["number"] for row in rows}), start=1)
+    }
+
+    certificates: list[Certificate] = []
+    seen: set[str] = set()
+    pairs: list[tuple[str, str]] = []
+    linked: set[tuple[str, str]] = set()
+    for row in rows:
+        number = row["number"]
+        code = codes[number]
+        if number not in seen:
+            seen.add(number)
+            url = _text(row.get("Ссылка на ФСА"))
+            label = _text(row.get("Сертификат.Тип сертификата"))
+            kind = _kind(label)
+            official = _is_official(url)
+            certificates.append(
+                Certificate(
+                    code=code,
+                    doc_kind=kind,
+                    doc_kind_label=label,
+                    doc_number=number,
+                    scope_text=None,  # the report names the articles, not the scope
+                    regulation=None,
+                    valid_from=_date(row.get("Сертификат.Дата начала срока действия")),
+                    valid_to=_date(row.get("Сертификат.Дата окончания срока действия")),
+                    registry_url=url if official else None,
+                    other_url=url if url and not official else None,
+                    scan_url=None,
+                    link_status=(
+                        "official" if official
+                        # A refusal letter states the goods need no certificate,
+                        # so there is no register for it to be in.
+                        else "not_required" if kind == "refusal_letter"
+                        else "unconfirmed"
+                    ),
+                    source="Выгрузка «Сертификаты номенклатуры» из 1С Джаз-Вей, 27.08.2026",
+                )
+            )
+        if (code, row["article"]) not in linked:
+            linked.add((code, row["article"]))
+            pairs.append((code, row["article"]))
+
     return certificates, pairs
 
 
@@ -571,12 +664,34 @@ def supplier_products(conn: Connection, supplier_code: str) -> list[dict[str, An
     )
 
 
+def jazzway_links(
+    conn: Connection, pairs: list[tuple[str, str]]
+) -> list[tuple[str, str, str, str | None]]:
+    """Registry links for the articles we actually carry.
+
+    The registry writes the article bare, the price list with a leading dot
+    (".5027244"), and the link has to carry the price list's spelling - that is
+    what `product_certificates` joins on. Articles the registry covers but our
+    price list does not are dropped.
+    """
+    index = {
+        order_code_for(product["supplier_sku"]): product["supplier_sku"]
+        for product in supplier_products(conn, "jazzway")
+    }
+    return [(code, index[article], "explicit", None) for code, article in pairs if article in index]
+
+
 def load_all(conn: Connection, progress: Callable[[str], None] = print) -> list[LoadResult]:
     results = []
 
     certs, pairs = load_arlight()
     progress(f"Арлайт: {len(certs)} документов, {len(pairs):,} связей с артикулами")
     results.append(save(conn, "arlight", certs, [(c, s, "explicit", None) for c, s in pairs]))
+
+    certs, pairs = load_jazzway()
+    links = jazzway_links(conn, pairs)
+    progress(f"Jazzway: {len(certs)} документов, {len(links):,} связей с артикулами")
+    results.append(save(conn, "jazzway", certs, links))
 
     for supplier, loader in (("crystal", load_crystal), ("salux", load_salux)):
         certs = loader()

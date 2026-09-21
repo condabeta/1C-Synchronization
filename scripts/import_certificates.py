@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 """Load conformity documents and link them to products.
 
-Reads the Arlight, LED Crystal and Salux registries. Arlight's links come
-straight from its registry; LED Crystal and Salux documents are matched to
-products by series through the rules in staging/certificates.py. Re-running is
-safe: each supplier's documents and links are replaced as a whole.
+Reads the Arlight, Jazzway, LED Crystal and Salux registries. Arlight and
+Jazzway name their articles, so their links come straight from the registry;
+LED Crystal and Salux documents are matched to products by series through the
+rules in staging/certificates.py. Re-running is safe: each supplier's documents
+and links are replaced as a whole.
 
     python scripts/import_certificates.py --dry-run
     python scripts/import_certificates.py
@@ -54,6 +55,14 @@ def dry_run() -> int:
     print(f"Арлайт: {len(certs)} документов, {len(pairs):,} связей с артикулами")
     print("   ", dict(Counter(c.link_status for c in certs)))
     with db_session() as conn:
+        certs, pairs = C.load_jazzway()
+        links = C.jazzway_links(conn, pairs)
+        articles = {article for _, article in pairs}
+        print(
+            f"Jazzway: {len(certs)} документов | артикулов в реестре {len(articles)} | "
+            f"связей с нашим прайсом {len(links):,} на {len({sku for _, sku, _, _ in links})} товаров"
+        )
+        print("   ", dict(Counter(c.link_status for c in certs)))
         for supplier, loader in (("crystal", C.load_crystal), ("salux", C.load_salux)):
             certs = loader()
             products = C.supplier_products(conn, supplier)

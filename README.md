@@ -110,7 +110,8 @@ The current rules and how a rule is chosen for a product are in
 ### Certificates
 
 Loads the conformity documents (declarations, certificates, refusal letters)
-from the Arlight, LED Crystal and Salux registries and links them to products:
+from the Arlight, Jazzway, LED Crystal and Salux registries and links them to
+products:
 
 ```
 python scripts/import_certificates.py --dry-run
