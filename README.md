@@ -120,6 +120,19 @@ python scripts/import_certificates.py
 
 See [docs/certificates.md](docs/certificates.md).
 
+### Supplier site content
+
+Salux and LED Crystal publish photos and descriptions only on their own sites.
+Salux's are scraped per series and applied to every article of that series:
+
+```
+python scripts/import_salux_content.py --dry-run
+python scripts/import_salux_content.py
+```
+
+Who has agreed to what is recorded in
+[docs/supplier_permissions.md](docs/supplier_permissions.md).
+
 ### Moderation
 
 ```

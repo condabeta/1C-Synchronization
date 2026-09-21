@@ -7,7 +7,7 @@ Keep this current - it is the record of what we are allowed to publish.
 |---|---|---|---|
 | LED Crystal | **Yes, granted** | **Yes, requested** | Email reply, 5 Sep 2026 |
 | ViaSvet | Assumed, unconfirmed | unknown | needs written confirmation |
-| STZ Salux | Not asked yet | unknown | site is the only content source they have |
+| STZ Salux | **Client instructed it** | unknown | Юлия, 21 Sep 2026: site is their only format |
 | Dekomo | n/a - data comes from their export | — | |
 | Arlight | n/a - data comes from their XML | — | |
 | SWG | n/a - data comes from their YML | — | |
@@ -43,3 +43,26 @@ Technical notes for the scraper:
 Their price list has no descriptions, so the site is the only source. We have
 never had this in writing - worth asking in the same three-question form that
 worked for LED Crystal.
+
+## STZ Salux (stz-salux.ru)
+
+Salux exports no photos and no descriptions, and has no format in which to send
+them. On 21 Sep 2026 Юлия said to take them from the site, which is what
+`staging/importers/salux_site.py` does.
+
+**Salux themselves have not been asked.** The client is their distributor and
+gave the instruction, but a written yes from Salux is still worth having, the
+way LED Crystal gave one. Every scraped card carries
+«Фото и описание — СТЗ «САЛЮКС» (stz-salux.ru)» in `suppliers.content_attribution`,
+so what came from them can be found and removed if they object.
+
+Technical notes:
+
+- `robots.txt` allows it: the disallow list is `/bitrix/`, `index.php` and
+  sorting, printing and login parameters, none of which the crawler touches.
+- Pages are found by walking `/products/` into its sections. `sitemap.xml` was
+  last written in 2024 and misses eleven pages, including the Гранит, Оникс and
+  Сегмент series.
+- The site publishes **one page per series**, not per article: 56 pages, 54
+  series, 228 photos. A series page covers every wattage in that series.
+- The crawl is one pass with a 0.5 s delay - about a minute for the catalogue.
