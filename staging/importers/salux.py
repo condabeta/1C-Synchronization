@@ -243,7 +243,9 @@ def normalize_row(
         "price_old": None,
         "stock_qty": None,
         "is_available": 1,
-        "product_url": "https://stz-salux.ru",
+        # The series page comes from the site crawl (import_salux_content.py);
+        # the price file knows none, and the upsert keeps the crawled one.
+        "product_url": None,
         "barcode": None,
         "images_json": [],
         "attributes_json": attrs,

@@ -143,10 +143,10 @@ def normalize_row(
     name = _build_name(sku, values, headers, sheet_name)
     attrs = _build_attributes(values, headers, sheet_name)
     images = list(site_info.images) if site_info and site_info.images else []
-    product_url = site_info.product_url if site_info and site_info.product_url else "https://led-crystal.ru"
+    # None, not the site's front page: the upsert keeps whatever page a
+    # previous crawl found, and a front page is no use on a product card.
+    product_url = site_info.product_url if site_info else None
     description = site_info.description if site_info and site_info.description else ""
-    if site_info and site_info.description:
-        attrs["description"] = site_info.description
 
     normalized = {
         "supplier_sku": sku,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -22,9 +23,23 @@ class EnqueueStats:
     updated_links: int = 0
 
 
+INTERNAL_SKU_MAX = 128  # products.internal_sku is VARCHAR(128), and unique
+
+
 def _internal_sku(supplier_code: str, supplier_sku: str) -> str:
+    """A stable key for the catalogue row a supplier article created.
+
+    Supplier articles are themselves up to 128 characters, so the prefixed key
+    can overflow. Cutting it would let two articles that share their first
+    characters collapse onto one catalogue row - a unique-key violation that
+    rolls back the whole batch - so an over-long key keeps its head and ends
+    with a hash of the full article instead.
+    """
     sku = f"{supplier_code}:{supplier_sku}"
-    return sku[:128]
+    if len(sku) <= INTERNAL_SKU_MAX:
+        return sku
+    digest = hashlib.sha1(sku.encode("utf-8")).hexdigest()[:12]
+    return f"{sku[: INTERNAL_SKU_MAX - len(digest) - 1]}~{digest}"
 
 
 def _parse_images(raw: Any) -> list[str]:
@@ -438,7 +453,7 @@ def enqueue_supplier_products(
                 "supplier_sku": row["supplier_sku"],
                 "content_hash": row.get("content_hash"),
             }
-            if _enqueue_product(
+            queued = _enqueue_product(
                 conn,
                 product_id=product_id,
                 supplier_product_id=row["id"],
@@ -446,15 +461,20 @@ def enqueue_supplier_products(
                 queue_reason=reason,
                 priority=priority,
                 diff=diff,
-            ):
-                stats.queued += 1
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "UPDATE supplier_products SET is_changed = 0 WHERE id = %s",
-                        (row["id"],),
-                    )
-            else:
-                stats.skipped += 1
+            )
+            stats.queued += 1 if queued else 0
+            stats.skipped += 0 if queued else 1
+            # Cleared either way. The supplier's change has already been applied
+            # to the product above, and when a queue item for it is still
+            # pending the change is folded into that item - there is nothing
+            # left to pick up. Leaving the flag set made every later run
+            # re-select the same rows, so the queue never drained: 151,920 of
+            # 151,921 changed rows were stuck in exactly that state.
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE supplier_products SET is_changed = 0 WHERE id = %s",
+                    (row["id"],),
+                )
             continue
 
         if product_id:
@@ -482,28 +502,28 @@ def enqueue_supplier_products(
     return stats
 
 
+# SUM(status = '...') has to read every row. GROUP BY status reads the status
+# index instead, which is the difference between a four-second dashboard and an
+# instant one at 167,000 queue rows.
+QUEUE_STATUS_KEYS = {"pending": "pending", "in_review": "in_review",
+                     "approved": "approved", "rejected": "rejected"}
+PRODUCT_STATUS_KEYS = {"pending_moderation": "pending_products",
+                       "approved": "approved_products", "published": "published_products"}
+
+
+def _counts_by_status(conn: Connection, table: str, keys: dict[str, str]) -> dict[str, int]:
+    rows = fetch_all(conn, f"SELECT status, COUNT(*) AS cnt FROM {table} GROUP BY status")
+    counts = {key: 0 for key in keys.values()}
+    for row in rows:
+        key = keys.get(row["status"])
+        if key:
+            counts[key] = row["cnt"]
+    return counts
+
+
 def get_dashboard_stats(conn: Connection) -> dict[str, Any]:
-    summary = fetch_one(
-        conn,
-        """
-        SELECT
-            SUM(status = 'pending') AS pending,
-            SUM(status = 'in_review') AS in_review,
-            SUM(status = 'approved') AS approved,
-            SUM(status = 'rejected') AS rejected
-        FROM moderation_queue
-        """,
-    ) or {}
-    products = fetch_one(
-        conn,
-        """
-        SELECT
-            SUM(status = 'pending_moderation') AS pending_products,
-            SUM(status = 'approved') AS approved_products,
-            SUM(status = 'published') AS published_products
-        FROM products
-        """,
-    ) or {}
+    summary = _counts_by_status(conn, "moderation_queue", QUEUE_STATUS_KEYS)
+    products = _counts_by_status(conn, "products", PRODUCT_STATUS_KEYS)
     by_supplier = fetch_all(
         conn,
         """
@@ -676,22 +696,33 @@ def approve_queue_item(
             """,
             (reviewer, notes, datetime.now(), queue_id),
         )
+        # A product that is already live stays live: approving a change to it
+        # must not drop it back to 'approved', which would read as "not
+        # published yet" to everything downstream.
         cur.execute(
             """
             UPDATE products
-            SET status = 'approved',
+            SET status = IF(status IN ('published', 'synced_1c'), status, 'approved'),
                 moderation_required = 0,
                 sync_1c_status = 'pending'
             WHERE id = %s
             """,
             (item["product_id"],),
         )
+        # One outstanding export per product. Re-approving after a rejection, or
+        # approving two queue items for the same product, used to leave several
+        # identical rows for a consumer to send twice.
         cur.execute(
             """
             INSERT INTO sync_outbox (entity_type, entity_id, target_system, action, payload_json)
-            VALUES ('product', %s, 'onec', 'export', JSON_OBJECT('product_id', %s))
+            SELECT 'product', %s, 'onec', 'export', JSON_OBJECT('product_id', %s)
+            FROM DUAL WHERE NOT EXISTS (
+                SELECT 1 FROM (SELECT id FROM sync_outbox
+                    WHERE entity_type = 'product' AND entity_id = %s
+                      AND target_system = 'onec' AND status = 'pending') AS pending
+            )
             """,
-            (item["product_id"], item["product_id"]),
+            (item["product_id"], item["product_id"], item["product_id"]),
         )
 
     _record_status(conn, item["product_id"], old_status, "approved", reviewer, notes or "Approved in moderation")
@@ -728,13 +759,29 @@ def reject_queue_item(
             """,
             (reviewer, notes, datetime.now(), queue_id),
         )
+        # Rejecting a change to a published product means "do not apply this
+        # change", not "take the product off the site". Removing a live product
+        # is a separate, deliberate act - it needs a delete sent to the site,
+        # which nothing does yet.
         cur.execute(
             """
             UPDATE products
-            SET status = 'rejected', moderation_required = 0
+            SET status = IF(status IN ('published', 'synced_1c'), status, 'rejected'),
+                moderation_required = 0,
+                sync_1c_status = IF(status IN ('published', 'synced_1c'), sync_1c_status, NULL)
             WHERE id = %s
             """,
             (item["product_id"],),
+        )
+        # An approval this rejection reverses must not stay queued for export.
+        cur.execute(
+            """
+            DELETE FROM sync_outbox
+            WHERE entity_type = 'product' AND entity_id = %s AND status = 'pending'
+              AND EXISTS (SELECT 1 FROM products
+                          WHERE id = %s AND status NOT IN ('published', 'synced_1c'))
+            """,
+            (item["product_id"], item["product_id"]),
         )
 
     _record_status(conn, item["product_id"], old_status, "rejected", reviewer, notes or "Rejected in moderation")

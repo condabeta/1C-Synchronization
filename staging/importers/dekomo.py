@@ -30,7 +30,13 @@ CORE_COLUMNS = {
     "Количество на складе": "stock_qty",
     "Бренд": "brand",
     "Артикул поставщика": "manufacturer_code",
-    "Группа товара": "supplier_category",
+    # «Группа товара» was read as the category until 21.09.2026. It is not one:
+    # it is a variant group, an article list tying colour or size variants of
+    # one product together, and it is empty on 179,788 of 191,720 rows. The
+    # category is «Запись типов» - see _categories below.
+    "Группа товара": "variant_group",
+    "Запись типов": "supplier_category",
+    "Дополнительная запись типов": "supplier_category_extra",
     "Дополнительное описание": "description",
     # Present from the 09.09.2026 export onwards, which widened from 26 columns
     # to 170. Absent from older files, so both are read defensively.
@@ -52,11 +58,17 @@ class ImportStats:
     errors: list[dict[str, Any]] = field(default_factory=list)
 
 
+# Values that mean "no value" once a spreadsheet or a DataFrame has been through
+# the export. Without this, Decimal("nan") reaches a comparison and the row is
+# dropped as a parse error.
+_EMPTY_TEXT = {"", "nan", "none", "null", "-", "—", "nat"}
+
+
 def _clean(value: Any) -> str | None:
     if value is None:
         return None
     text = str(value).strip()
-    return text or None
+    return None if text.lower() in _EMPTY_TEXT else text
 
 
 def _parse_decimal(value: Any) -> Decimal | None:
@@ -115,6 +127,30 @@ def _split_barcodes(value: Any) -> list[str]:
     return [part[:BARCODE_MAX] for part in parts if part]
 
 
+def _categories(row: dict[str, Any]) -> tuple[str | None, str | None]:
+    """(category, category path) from Dekomo's type columns.
+
+    «Запись типов» lists the types a product belongs to, broadest first:
+    "Потолочные светильники,Точечные светильники,Встраиваемые светильники".
+    The last one is the most specific, so it becomes the category and the whole
+    chain becomes the path - the same shape every other supplier delivers, which
+    is what the markup rules and the category tree match against.
+
+    «Дополнительная запись типов» ("Типы/Светильники/Подвесные") is a shorter
+    tree that is filled on less than half the rows, so it only serves as a
+    fallback.
+    """
+    types = [part.strip() for part in (_clean(row.get("Запись типов")) or "").split(",")]
+    types = [part for part in types if part]
+    if not types:
+        extra = _clean(row.get("Дополнительная запись типов")) or ""
+        # "Типы/" is the root of every such path and says nothing.
+        types = [part.strip() for part in extra.split("/") if part.strip() and part.strip() != "Типы"]
+    if not types:
+        return None, None
+    return types[-1], " / ".join(types)
+
+
 def _content_hash(payload: dict[str, Any]) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -136,6 +172,12 @@ def _normalize_row(row: dict[str, Any], *, store_raw: bool) -> dict[str, Any] | 
     stock_qty = _parse_stock(row.get("Количество на складе"))
     images = _build_images(row)
     attrs = _build_attributes(row, set(CORE_COLUMNS) | set(IMAGE_COLUMNS))
+    category, category_path = _categories(row)
+    # Kept as an attribute: it is how Dekomo ties colour and size variants of one
+    # product together, which the catalogue will want when grouping variants.
+    variant_group = _clean(row.get("Группа товара"))
+    if variant_group:
+        attrs["variant_group"] = variant_group
 
     # 72 products carry several GTINs in one cell - one per pack or variant -
     # comma-separated, up to 133 characters. The column holds a single GTIN for
@@ -156,9 +198,10 @@ def _normalize_row(row: dict[str, Any], *, store_raw: bool) -> dict[str, Any] | 
         "name": _clean(row.get("Наименование")),
         "brand": _clean(row.get("Бренд")),
         "manufacturer_code": _clean(row.get("Артикул поставщика")),
-        "supplier_category": _clean(row.get("Группа товара")),
+        "supplier_category": category,
+        "supplier_category_path": category_path,
         "description": _clean(row.get("Дополнительное описание")),
-        "price": price_purchase or price_retail,
+        "price": price_purchase if price_purchase is not None else price_retail,
         "price_retail": price_retail,
         "price_old": price_old,
         "stock_qty": stock_qty,
@@ -173,6 +216,8 @@ def _normalize_row(row: dict[str, Any], *, store_raw: bool) -> dict[str, Any] | 
             "supplier_sku": normalized["supplier_sku"],
             "name": normalized["name"],
             "brand": normalized["brand"],
+            "manufacturer_code": normalized["manufacturer_code"],
+            "supplier_category_path": normalized["supplier_category_path"],
             "description": normalized["description"],
             "price": str(price_purchase) if price_purchase is not None else None,
             "price_retail": str(price_retail) if price_retail is not None else None,
@@ -393,14 +438,14 @@ def _upsert_batch(
     insert_sql = """
         INSERT INTO supplier_products (
             supplier_id, import_run_id, supplier_sku, supplier_sku_raw,
-            name, brand, manufacturer_code, supplier_category, description,
+            name, brand, manufacturer_code, supplier_category, supplier_category_path, description,
             price, price_retail, price_old, stock_qty, is_available,
             barcode, pricing_rule_id,
             attributes_json, images_json, raw_data_json, content_hash,
             is_new, is_changed, last_import_run_id, last_seen_at
         ) VALUES (
             %(supplier_id)s, %(import_run_id)s, %(supplier_sku)s, %(supplier_sku_raw)s,
-            %(name)s, %(brand)s, %(manufacturer_code)s, %(supplier_category)s, %(description)s,
+            %(name)s, %(brand)s, %(manufacturer_code)s, %(supplier_category)s, %(supplier_category_path)s, %(description)s,
             %(price)s, %(price_retail)s, %(price_old)s, %(stock_qty)s, %(is_available)s,
             %(barcode)s, %(pricing_rule_id)s,
             %(attributes_json)s, %(images_json)s, %(raw_data_json)s, %(content_hash)s,
@@ -413,6 +458,7 @@ def _upsert_batch(
             brand = VALUES(brand),
             manufacturer_code = VALUES(manufacturer_code),
             supplier_category = VALUES(supplier_category),
+            supplier_category_path = VALUES(supplier_category_path),
             description = VALUES(description),
             price = VALUES(price),
             price_retail = VALUES(price_retail),
@@ -462,6 +508,7 @@ def _upsert_batch(
                 "brand": item["brand"],
                 "manufacturer_code": item["manufacturer_code"],
                 "supplier_category": item["supplier_category"],
+                "supplier_category_path": item["supplier_category_path"],
                 "description": item["description"],
                 "price": item["price"],
                 "price_retail": item["price_retail"],

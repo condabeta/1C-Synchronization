@@ -29,6 +29,19 @@ from staging.moderation.service import (
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 
+PER_PAGE = 50
+MAX_PAGE = 1_000_000  # a page number is pasted, mistyped and fuzzed; OFFSET is not
+ENQUEUE_MAX = 5_000
+
+
+def _page_arg(source) -> int:
+    """A page number that is always a sane int. An unparsable or huge value used
+    to reach MySQL as an OFFSET and answer 500."""
+    try:
+        return min(max(int(source.get("page", 1)), 1), MAX_PAGE)
+    except (TypeError, ValueError):
+        return 1
+
 
 def create_app() -> Flask:
     app = Flask(__name__, template_folder=str(TEMPLATE_DIR))
@@ -44,7 +57,9 @@ def create_app() -> Flask:
         if not raw_path:
             abort(400)
         file_path = Path(raw_path).resolve()
-        if not any(str(file_path).startswith(str(root)) for root in allowed_roots):
+        # is_relative_to, not startswith: "…\на сайт_backup" starts with
+        # "…\на сайт" as text but is a different directory.
+        if not any(file_path.is_relative_to(root) for root in allowed_roots):
             abort(403)
         if not file_path.is_file():
             abort(404)
@@ -71,11 +86,8 @@ def create_app() -> Flask:
         status = request.args.get("status", "pending")
         status = status if status in STATUSES else "pending"
         filters = _discrepancy_filters(request.args)
-        try:
-            page = max(int(request.args.get("page", 1)), 1)
-        except ValueError:
-            page = 1
-        per_page = 50
+        page = _page_arg(request.args)
+        per_page = PER_PAGE
 
         with db_session() as conn:
             items, total = list_discrepancies(conn, status=status, page=page, per_page=per_page, **filters)
@@ -109,7 +121,12 @@ def create_app() -> Flask:
 
         with db_session() as conn:
             if request.form.get("scope") == "filter":
-                # Everything pending that matches the filters on screen.
+                # Everything pending that matches the filters on screen - but
+                # only if something is actually filtered. With every filter
+                # empty this resolves the entire table in one click, which is
+                # not what "apply to the filtered list" means to a moderator.
+                if not any(filters.values()):
+                    abort(400)
                 count = resolve_discrepancies(conn, action=action, reviewer=reviewer, **filters)
             else:
                 ids = [int(value) for value in request.form.getlist("ids") if value.isdigit()]
@@ -131,7 +148,7 @@ def create_app() -> Flask:
         supplier = request.args.get("supplier") or None
         search = request.args.get("search") or None
         reason = request.args.get("reason") or None
-        page = max(int(request.args.get("page", 1)), 1)
+        page = _page_arg(request.args)
 
         with db_session() as conn:
             items, total = list_queue_items(
@@ -190,8 +207,14 @@ def create_app() -> Flask:
     @app.post("/enqueue")
     def enqueue_form():
         supplier = request.form.get("supplier") or None
-        limit_raw = request.form.get("limit", "50")
-        limit = int(limit_raw) if limit_raw else 50
+        # A typed field: a word, a negative number or an empty one all used to
+        # reach SQL. 0 was the worst - falsy, so it removed the LIMIT and
+        # scanned every unmatched row inside one web request.
+        try:
+            limit = int(request.form.get("limit", "50"))
+        except (TypeError, ValueError):
+            limit = 50
+        limit = min(max(limit, 1), ENQUEUE_MAX)
         with db_session() as conn:
             stats = enqueue_supplier_products(conn, supplier_code=supplier, limit=limit)
         return render_template(

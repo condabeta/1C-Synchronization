@@ -105,7 +105,10 @@ def normalize_offer(
         "brand": brand,
         "manufacturer_code": sku,
         "supplier_category": category_name,
-        "supplier_category_path": category_id,
+        # The feed's categories are a flat list with no parentId, so the path is
+        # the name itself. It used to hold the raw id ("00-00037304"), which is
+        # what the markup rules and the category tree then tried to match on.
+        "supplier_category_path": category_name,
         "price": price,
         "price_retail": price,
         "price_old": None,
@@ -114,7 +117,7 @@ def normalize_offer(
         "product_url": clean(_child_text(offer, "url")),
         "barcode": clean(_child_text(offer, "barcode")),
         "images_json": images,
-        "attributes_json": params,
+        "attributes_json": {**params, "category_id": category_id} if category_id else params,
         "raw_data_json": None,
     }
     if store_raw:

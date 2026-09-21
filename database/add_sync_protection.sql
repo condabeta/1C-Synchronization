@@ -2,7 +2,9 @@
 -- This allows protecting manually entered fields from being overwritten during supplier imports
 
 -- Table to configure sync settings per supplier and field
-CREATE TABLE supplier_field_sync_config (
+USE svetoyar_staging;
+
+CREATE TABLE IF NOT EXISTS supplier_field_sync_config (
   id              INT UNSIGNED NOT NULL AUTO_INCREMENT,
   supplier_id     INT UNSIGNED    NOT NULL,
   field_name      VARCHAR(64)     NOT NULL COMMENT 'e.g., description, price, stock_qty',
@@ -24,7 +26,7 @@ ADD COLUMN sync_override_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=allow 
 -- Protected fields (manual-only): description, attributes
 -- Sync fields (auto-update): price, stock_qty, is_available
 
-INSERT INTO supplier_field_sync_config (supplier_id, field_name, sync_enabled)
+INSERT IGNORE INTO supplier_field_sync_config (supplier_id, field_name, sync_enabled)
 SELECT id, 'description', 0 FROM suppliers
 UNION ALL
 SELECT id, 'price', 1 FROM suppliers  

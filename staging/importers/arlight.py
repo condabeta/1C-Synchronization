@@ -38,38 +38,77 @@ def _report(progress, message: str) -> None:
         print(message, flush=True)
 
 
+# The price file is a stack of blocks. Each one opens with a section line, then
+# repeats the column header, then lists its products:
+#
+#   Светодиодные ленты | ... | COB сплошное свечение / X360 5V 8mm 5 W/m
+#                      | ... | Бескорпусные ленты, серия X360.      <- a note
+#   Фото | Артикул | Склад | Наименование | Страна | Цена (руб.) | ...
+#        | 041701  | 0     | Лента COB-X360-8mm ...
+#
+# Column A holds the department, column F the section within it, already written
+# as a path. That is the only place Arlight states a category: the XML carries
+# numeric group ids with no dictionary to resolve them.
+CATEGORY_COLUMN = 0
+SECTION_COLUMN = 5
+SKU_COLUMN = 1
+
+
 def parse_excel_price(excel_path: str) -> dict[str, dict[str, Any]]:
-    """Parse Excel price file and return dict by SKU."""
+    """Parse the Excel price file and return a dict by SKU, section included."""
     _report(None, f"Parsing Excel price file: {excel_path}")
-    df = pd.read_excel(excel_path, header=None)
-    
-    # Find header row (contains "Артикул")
-    header_row = None
-    for i, row in df.iterrows():
-        if any("Артикул" in str(cell) for cell in row if pd.notna(cell)):
-            header_row = i
-            break
-    
-    if header_row is None:
-        raise ValueError("Could not find header row with 'Артикул' in Excel file")
-    
-    # Read with proper header
-    df = pd.read_excel(excel_path, header=header_row)
-    
-    price_data = {}
-    for _, row in df.iterrows():
-        sku = clean(row.get("Артикул"))
-        if not sku:
+    frame = pd.read_excel(excel_path, header=None)
+
+    def cell(row: "pd.Series", index: int) -> str:
+        if index >= len(row):
+            return ""
+        value = row.iloc[index]
+        return "" if pd.isna(value) else str(value).strip()
+
+    headers: dict[str, int] | None = None
+    department = ""
+    section = ""
+    price_data: dict[str, dict[str, Any]] = {}
+
+    for _, row in frame.iterrows():
+        first = cell(row, SKU_COLUMN)
+
+        if first == "Артикул":  # the header repeats above every block
+            headers = {cell(row, i): i for i in range(len(row)) if cell(row, i)}
             continue
-        
-        price_data[sku] = {
-            "stock_qty": parse_decimal(row.get("Склад")),
-            "price": parse_decimal(row.get("Цена (руб.)")),
-            "country": clean(row.get("Страна")),
-            "excel_description": clean(row.get("Описание")),
+
+        if not first:
+            # A line with no article is either a section line or a note under
+            # one. Only a line that names a department opens a new section; the
+            # note that may follow it leaves the section alone.
+            top, sub = cell(row, CATEGORY_COLUMN), cell(row, SECTION_COLUMN)
+            if top:
+                department, section = top, sub
+            continue
+
+        if headers is None:
+            continue  # data before any header: not a price row
+
+        def value(column: str) -> Any:
+            index = headers.get(column)
+            return None if index is None else row.iloc[index]
+
+        path = " / ".join(part for part in (department, section) if part)
+        # The section is itself a path ("COB сплошное свечение / X360 5V 8mm"),
+        # so the category is its last step. The separator is a spaced slash: a
+        # bare one also appears inside a step, as in "5 W/m".
+        leaf = section.split(" / ")[-1].strip() if section else department
+        price_data[first] = {
+            "stock_qty": parse_decimal(value("Склад")),
+            "price": parse_decimal(value("Цена (руб.)")),
+            "country": clean(value("Страна")),
+            "excel_description": clean(value("Описание")),
+            "supplier_category": leaf or None,
+            "supplier_category_path": path or None,
         }
-    
-    _report(None, f"Parsed {len(price_data)} SKUs from Excel")
+
+    with_section = sum(1 for item in price_data.values() if item["supplier_category"])
+    _report(None, f"Parsed {len(price_data)} SKUs from Excel, {with_section} with a section")
     return price_data
 
 
@@ -145,13 +184,17 @@ def merge_arlight_data(
             "brand": product["brand"],
             "manufacturer_code": product["manufacturer_code"],
             "description": description,
-            "supplier_category": "",  # Could be extracted from groups if needed
-            "supplier_category_path": "",
+            # From the price file's section lines. The XML's <groups> are
+            # numeric ids and the feed ships no dictionary for them.
+            "supplier_category": price_info.get("supplier_category"),
+            "supplier_category_path": price_info.get("supplier_category_path"),
             "price": price_info.get("price"),
             "price_retail": price_info.get("price"),
             "price_old": None,
             "stock_qty": price_info.get("stock_qty"),
-            "is_available": 1 if price_info.get("stock_qty", 0) > 0 else 0,
+            # A SKU absent from the price file, or present with an empty stock
+            # cell, counts as unavailable - comparing None here used to raise.
+            "is_available": 1 if (price_info.get("stock_qty") or 0) > 0 else 0,
             "product_url": None,
             "barcode": product["ean13"],
             "country": price_info.get("country") or product["country"],
@@ -171,7 +214,16 @@ def merge_arlight_data(
                 "name": merged_product["name"],
                 "brand": merged_product["brand"],
                 "description": merged_product["description"],
-                "price": str(merged_product["price"]) if merged_product["price"] else None,
+                # The price file is also the stock source, and a stock move is
+                # often the only change in a row. Leaving stock_qty and the
+                # section out of the hash made such a row look unchanged, so the
+                # upsert skipped it and the DB kept yesterday's stock.
+                "price": str(merged_product["price"]) if merged_product["price"] is not None else None,
+                "stock_qty": (
+                    str(merged_product["stock_qty"])
+                    if merged_product["stock_qty"] is not None else None
+                ),
+                "supplier_category_path": merged_product["supplier_category_path"],
                 "is_available": merged_product["is_available"],
                 "images_json": merged_product["images_json"],
                 "attributes_json": merged_product["attributes_json"],

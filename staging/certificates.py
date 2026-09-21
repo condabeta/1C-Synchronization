@@ -618,6 +618,13 @@ def save(
     supplier_id = _supplier_id(conn, supplier_code)
     result = LoadResult(supplier_code, documents=len(certificates))
 
+    # A registry that parsed to nothing is a broken file, not an instruction to
+    # delete every document we hold for that supplier.
+    if not certificates:
+        raise ValueError(
+            f"Registry for '{supplier_code}' yielded no documents - refusing to wipe the existing ones"
+        )
+
     with conn.cursor() as cur:
         for cert in certificates:
             cur.execute(

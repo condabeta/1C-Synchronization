@@ -18,7 +18,13 @@
   <p><strong>Price:</strong> {{ item.price or item.supplier_price or '—' }} · Retail: {{ item.price_retail or '—' }}</p>
   <p><strong>Stock:</strong> {{ item.stock_qty if item.stock_qty is not none else '—' }}</p>
   {% if item.product_url %}
-  <p><strong>URL:</strong> <a href="{{ item.product_url }}" target="_blank">{{ item.product_url }}</a></p>
+  {# Only http(s): the URL comes from a supplier feed, and a javascript: one
+     would run on click. rel keeps the opened page away from this one. #}
+  {% if item.product_url.startswith('http://') or item.product_url.startswith('https://') %}
+  <p><strong>URL:</strong> <a href="{{ item.product_url }}" target="_blank" rel="noopener noreferrer">{{ item.product_url }}</a></p>
+  {% else %}
+  <p><strong>URL:</strong> {{ item.product_url }}</p>
+  {% endif %}
   {% endif %}
   {% if item.description %}
   <p><strong>Description:</strong><br>{{ item.description }}</p>

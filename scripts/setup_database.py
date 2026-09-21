@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 
@@ -67,6 +68,18 @@ def main() -> int:
         conn = get_connection(cfg)
         print(f"Applying schema from {SCHEMA_FILE}...")
         count = execute_sql_file(conn, SCHEMA_FILE)
+
+        # The schema alone is not a working database: pricing rules, sync
+        # protection, certificates, own articles and discrepancies all live in
+        # the migrations, and the moderation UI cannot start without them.
+        print("Applying migrations...")
+        migrate = subprocess.run(
+            [sys.executable, str(PROJECT_ROOT / "scripts" / "migrate.py")],
+            cwd=str(PROJECT_ROOT),
+        )
+        if migrate.returncode != 0:
+            print("Migrations failed - see the output above.", file=sys.stderr)
+            return 1
 
         # Ensure CSV source exists for Dekomo importer
         with conn.cursor() as cur:

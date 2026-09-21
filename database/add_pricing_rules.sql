@@ -14,7 +14,7 @@
 
 USE svetoyar_staging;
 
-CREATE TABLE supplier_pricing_rules (
+CREATE TABLE IF NOT EXISTS supplier_pricing_rules (
   id            INT UNSIGNED    NOT NULL AUTO_INCREMENT,
   supplier_id   INT UNSIGNED    NOT NULL,
   rule_name     VARCHAR(128)    NOT NULL COMMENT 'human label shown in reports',

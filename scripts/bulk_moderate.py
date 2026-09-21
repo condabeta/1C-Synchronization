@@ -34,8 +34,16 @@ def _pending_query(extra_where: str, supplier_code: str | None, limit: int | Non
                {HAS_IMAGES} AS has_images
         FROM moderation_queue mq
         JOIN products p ON p.id = mq.product_id
-        LEFT JOIN suppliers s ON s.id = p.primary_supplier_id
+        -- Through the queue item's own supplier row, the way the moderation UI
+        -- attributes an item. Going through products.primary_supplier_id
+        -- selected a different set than the moderator sees under the same
+        -- --supplier, so a bulk reject hit items belonging to someone else.
+        LEFT JOIN supplier_products sp ON sp.id = mq.supplier_product_id
+        LEFT JOIN suppliers s ON s.id = sp.supplier_id
         WHERE {' AND '.join(where)}
+        -- Deterministic, so --limit means the same rows twice running and a
+        -- dry-run predicts what the real run will do.
+        ORDER BY mq.priority, mq.id
         {limit_sql}
     """
     return sql, params

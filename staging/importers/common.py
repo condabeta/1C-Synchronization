@@ -247,7 +247,9 @@ def upsert_product_batch(
             price_old = VALUES(price_old),
             stock_qty = VALUES(stock_qty),
             is_available = VALUES(is_available),
-            product_url = VALUES(product_url),
+            -- Same reasoning as description: the Salux and Crystal price
+            -- files know no product page, the site scrapers do.
+            product_url = COALESCE(NULLIF(VALUES(product_url), ''), product_url),
             -- Same reasoning as description above: Jazzway's barcode comes from
             -- the YML feed, so a price-only run must not erase it.
             barcode = COALESCE(VALUES(barcode), barcode),
