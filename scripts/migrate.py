@@ -52,6 +52,8 @@ MIGRATIONS = [
     "add_certificates.sql",
     "add_field_discrepancies.sql",
     "add_publishing_fields.sql",
+    "add_moderation_indexes.sql",
+    "add_queue_supplier.sql",
 ]
 
 TRACKING_TABLE = """

@@ -421,12 +421,17 @@ def _enqueue_product(
         cur.execute(
             """
             INSERT INTO moderation_queue (
-                product_id, supplier_product_id, import_run_id,
+                product_id, supplier_product_id, supplier_id, import_run_id,
                 queue_reason, priority, status, diff_json
-            ) VALUES (%s, %s, %s, %s, %s, 'pending', %s)
+            ) VALUES (
+                %s, %s,
+                (SELECT supplier_id FROM supplier_products WHERE id = %s),
+                %s, %s, %s, 'pending', %s
+            )
             """,
             (
                 product_id,
+                supplier_product_id,
                 supplier_product_id,
                 import_run_id,
                 queue_reason,
@@ -587,8 +592,7 @@ def get_dashboard_stats(conn: Connection) -> dict[str, Any]:
         """
         SELECT s.name AS supplier_name, s.code AS supplier_code, COUNT(*) AS cnt
         FROM moderation_queue mq
-        JOIN supplier_products sp ON sp.id = mq.supplier_product_id
-        JOIN suppliers s ON s.id = sp.supplier_id
+        JOIN suppliers s ON s.id = mq.supplier_id
         WHERE mq.status = 'pending'
         GROUP BY s.id, s.name, s.code
         ORDER BY cnt DESC
@@ -633,7 +637,7 @@ def list_queue_items(
     params: list[Any] = [status]
     where = ["mq.status = %s"]
     if supplier_code:
-        where.append("s.code = %s")
+        where.append("mq.supplier_id = (SELECT id FROM suppliers WHERE code = %s)")
         params.append(supplier_code)
     if queue_reason:
         where.append("mq.queue_reason = %s")
@@ -643,19 +647,32 @@ def list_queue_items(
         search_pattern = f"%{search}%"
         params.extend([search_pattern, search_pattern, search_pattern, search_pattern])
 
-    total_row = fetch_one(
-        conn,
-        f"""
-        SELECT COUNT(*) AS cnt
-        FROM moderation_queue mq
-        LEFT JOIN supplier_products sp ON sp.id = mq.supplier_product_id
-        LEFT JOIN suppliers s ON s.id = sp.supplier_id
-        LEFT JOIN products p ON p.id = mq.product_id
-        WHERE {' AND '.join(where)}
-        """,
-        params,
-    )
+    # Unfiltered, the count is answerable from the queue's own index; the joins
+    # exist only to support the filters, and dragging 219,000 rows through them
+    # to count what the index already knows cost seconds per page view.
+    if len(where) == 1:
+        total_row = fetch_one(
+            conn, "SELECT COUNT(*) AS cnt FROM moderation_queue mq WHERE mq.status = %s", params
+        )
+    else:
+        total_row = fetch_one(
+            conn,
+            f"""
+            SELECT COUNT(*) AS cnt
+            FROM moderation_queue mq
+            LEFT JOIN supplier_products sp ON sp.id = mq.supplier_product_id
+            LEFT JOIN suppliers s ON s.id = sp.supplier_id
+            LEFT JOIN products p ON p.id = mq.product_id
+            WHERE {' AND '.join(where)}
+            """,
+            params,
+        )
     total = int(total_row["cnt"]) if total_row else 0
+    # Past the last page there is nothing to fetch, and asking MySQL for a deep
+    # OFFSET makes it walk the whole index to return an empty result: page
+    # 99999999 took eight seconds to say "no rows".
+    pages = max((total + per_page - 1) // per_page, 1)
+    page = min(page, pages)
     offset = (page - 1) * per_page
 
     rows = fetch_all(

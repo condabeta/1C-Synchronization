@@ -207,6 +207,9 @@ def list_discrepancies(
         status=status, supplier_code=supplier_code, field_name=field_name, search=search
     )
     total = fetch_one(conn, f"SELECT COUNT(*) AS cnt {FROM_SQL} WHERE {where}", params)
+    # Same as the queue: never ask for an offset past the end.
+    count = int(total["cnt"]) if total else 0
+    page = min(page, max((count + per_page - 1) // per_page, 1))
     rows = fetch_all(
         conn,
         f"""
