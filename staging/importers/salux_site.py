@@ -68,6 +68,15 @@ TITLE_RE = re.compile(
 # site's own pages just say "ССдВз". Same products, two spellings of the family.
 FAMILY_ALIASES = {"ссдвз": "ссдвз ех"}
 
+# The marine version of a luminaire is a different product at a different price
+# that shares its order marking: "ССдВз 1Ех 02 db-010-006 «Агат 10 1Ех»" is
+# 14 250 ₽ on the ССдВз 1Ех sheet and 14 962 ₽ on the ССдС sheet, and the photos
+# differ too - orange industrial body against a white marine one (client,
+# 21.09.2026). The site keeps them apart only in the heading, which starts
+# "Судовой", so that word is part of the key.
+MARINE_RE = re.compile(r"судов", re.I)
+MARINE_SHEET_PREFIX = "ссдс"
+
 # Placeholder pages: a section entry that was never filled in. They keep the
 # site's generic title and carry only chrome images.
 STUB_TITLE = "Светодиодная продукция"
@@ -81,11 +90,12 @@ class SaluxPage:
     series: str
     description: str | None
     images: list[str] = field(default_factory=list)
+    marine: bool = False
 
     @property
-    def key(self) -> tuple[str, str]:
+    def key(self) -> tuple[str, str, bool]:
         family = fold(self.family)
-        return (FAMILY_ALIASES.get(family, family), fold(self.series))
+        return (FAMILY_ALIASES.get(family, family), fold(self.series), self.marine)
 
 
 def _fetch(url: str, timeout: int = REQUEST_TIMEOUT) -> str:
@@ -145,6 +155,7 @@ def parse_product_page(url: str, markup: str) -> SaluxPage | None:
         series=match.group("series"),
         description=_text(description.group(1)) if description else None,
         images=images,
+        marine=bool(MARINE_RE.match(title)),
     )
 
 
@@ -176,9 +187,9 @@ def crawl(
     return pages
 
 
-def build_index(pages: list[SaluxPage]) -> dict[tuple[str, str], SaluxPage]:
-    """(family, series) -> page. The richer page wins a repeated key."""
-    index: dict[tuple[str, str], SaluxPage] = {}
+def build_index(pages: list[SaluxPage]) -> dict[tuple[str, str, bool], SaluxPage]:
+    """(family, series, marine) -> page. The richer page wins a repeated key."""
+    index: dict[tuple[str, str, bool], SaluxPage] = {}
     for page in pages:
         current = index.get(page.key)
         if current is None or len(page.images) > len(current.images):
@@ -196,10 +207,28 @@ def series_of(name: str | None) -> str | None:
     return match.group(1) if match else None
 
 
-def lookup(product: dict, index: dict[tuple[str, str], SaluxPage]) -> SaluxPage | None:
+def is_marine(product: dict) -> bool:
+    """Whether a price row is the marine version.
+
+    The ССдС sheet is the marine catalogue. Its own series carry ССдС markings,
+    but «Агат» sits there under a ССдВз 1Ех marking - the same marking as the
+    industrial one - so the sheet has to be asked, not the marking alone.
+    """
+    sheet = fold(product.get("sheet"))
+    marking = parse_salux_marking(product.get("supplier_sku") or "")
+    return sheet.startswith(MARINE_SHEET_PREFIX) or bool(marking and marking[0] == "ссдс")
+
+
+def lookup(product: dict, index: dict[tuple[str, str, bool], SaluxPage]) -> SaluxPage | None:
     """The page for a price row, by its marking's family and its name's series."""
     marking = parse_salux_marking(product.get("supplier_sku") or "")
     series = series_of(product.get("name"))
     if not marking or not series:
         return None
-    return index.get((marking[0], fold(series)))
+    marine = is_marine(product)
+    # Only one version of most series exists, and then the heading need not say
+    # which it is - so a miss falls back to the other one rather than losing the
+    # page. Where both exist, the exact key above has already answered.
+    return index.get((marking[0], fold(series), marine)) or index.get(
+        (marking[0], fold(series), not marine)
+    )

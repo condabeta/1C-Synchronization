@@ -40,7 +40,8 @@ from staging.importers.salux_site import (
 SUPPLIER_CODE = "salux"
 
 SELECT_SQL = """
-    SELECT sp.id, sp.supplier_sku, sp.name, sp.description, sp.images_json
+    SELECT sp.id, sp.supplier_sku, sp.name, sp.description, sp.images_json,
+           sp.attributes_json->>'$.sheet' AS sheet
     FROM supplier_products sp
     JOIN suppliers s ON s.id = sp.supplier_id
     WHERE s.code = %s
