@@ -52,9 +52,15 @@ PRODUCT_SQL = f"""
     SELECT p.id, p.internal_sku, p.onec_guid, p.onec_code, p.name, p.brand, p.description,
            p.barcode, p.unit, p.okei_code, p.weight, p.vat_rate, p.category_id,
            p.price, p.price_retail, p.stock_qty, p.is_available, p.slug,
-           c.onec_guid AS category_guid
+           c.onec_guid AS category_guid,
+           sp.supplier_sku AS supplier_marking, s.name AS supplier_name
     FROM products p
     LEFT JOIN categories c ON c.id = p.category_id
+    -- The supplier's own article travels with the product: 1C keys on our
+    -- number, and a manager ordering from the supplier needs theirs.
+    LEFT JOIN supplier_products sp ON sp.product_id = p.id
+                                  AND sp.supplier_id = p.primary_supplier_id
+    LEFT JOIN suppliers s ON s.id = p.primary_supplier_id
     WHERE p.status IN ({', '.join(['%s'] * len(PUBLISHABLE_STATUSES))})
       AND p.onec_guid IS NOT NULL
     ORDER BY p.id
@@ -158,11 +164,20 @@ def _product_node(parent: ET.Element, row: dict[str, Any], images: list[str]) ->
         _sub(node, "Картинка", image)
 
     details = _sub(node, "ЗначенияРеквизитов")
+    # Салюкс is the case that made this necessary: in 1C the article is ours
+    # ("000001") and the supplier's marking lives in a comment beside it
+    # (Юлия, 22.09.2026). Sending only one of the two loses the other.
+    marking = row.get("supplier_marking")
+    if marking and marking != (row["onec_code"] or row["internal_sku"]):
+        marking = f"{row['supplier_name']}: {marking}" if row.get("supplier_name") else marking
+    else:
+        marking = None
     for name, value in (
         ("Полное наименование", row["name"]),
         ("Бренд", row["brand"]),
         ("Вес", row["weight"]),
         ("Ссылка на сайт", row["slug"]),
+        ("Маркировка поставщика", marking),
     ):
         if value in (None, ""):
             continue

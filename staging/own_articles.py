@@ -226,3 +226,68 @@ def match_report(conn: Connection) -> dict[str, int]:
         (SUPPLIER_CODE, SUPPLIER_CODE),
     )
     return {k: int(v or 0) for k, v in (row or {}).items()}
+
+# ---------------------------------------------------------------------------
+# Applying our articles to the catalogue
+# ---------------------------------------------------------------------------
+
+# Юлия, 22.09.2026: in 1C Fresh the article is ours - "000001" - and the Salux
+# marking goes in the comment field. So the catalogue has to carry our article
+# as the one 1C receives, with the supplier's marking alongside it rather than
+# in its place.
+#
+# The marking is matched with a prefix, because the importer appends a
+# disambiguating suffix to markings shared by several products
+# (`ССдО 03-040-003 IP20 "Офис 40" [1200х180х40]`). A marking that matches more
+# than one own article is left alone: guessing which of our numbers a manager
+# meant is worse than leaving the supplier's marking in place.
+APPLY_OWN_SQL = """
+    UPDATE products p
+    JOIN supplier_products sp ON sp.product_id = p.id
+    JOIN suppliers s ON s.id = sp.supplier_id AND s.code = %s
+    JOIN own_articles oa ON oa.supplier_id = sp.supplier_id
+                        AND sp.supplier_sku LIKE CONCAT(oa.supplier_marking, '%%')
+    SET p.onec_code = oa.own_sku,
+        p.updated_at = NOW()
+    WHERE oa.supplier_marking IS NOT NULL AND oa.supplier_marking <> ''
+      AND (SELECT COUNT(*) FROM own_articles o2
+           WHERE o2.supplier_id = sp.supplier_id
+             AND sp.supplier_sku LIKE CONCAT(o2.supplier_marking, '%%')) = 1
+"""
+
+AMBIGUOUS_SQL = """
+    SELECT COUNT(*) AS cnt
+    FROM supplier_products sp
+    JOIN suppliers s ON s.id = sp.supplier_id AND s.code = %s
+    WHERE (SELECT COUNT(*) FROM own_articles oa
+           WHERE oa.supplier_id = sp.supplier_id
+             AND sp.supplier_sku LIKE CONCAT(oa.supplier_marking, '%%')) > 1
+"""
+
+
+def apply_own_articles(conn: Connection) -> dict[str, int]:
+    """Put our article on the catalogue rows it belongs to.
+
+    Returns how many were set, and how many markings were too ambiguous to
+    decide - those keep the supplier's marking and need a person.
+    """
+    with conn.cursor() as cur:
+        cur.execute(APPLY_OWN_SQL, (SUPPLIER_CODE,))
+        applied = cur.rowcount
+    conn.commit()
+    ambiguous = fetch_one(conn, AMBIGUOUS_SQL, (SUPPLIER_CODE,)) or {}
+    covered = fetch_one(
+        conn,
+        """
+        SELECT COUNT(*) AS cnt FROM products p
+        JOIN supplier_products sp ON sp.product_id = p.id
+        JOIN suppliers s ON s.id = sp.supplier_id AND s.code = %s
+        WHERE p.onec_code REGEXP '^[0-9]+$'
+        """,
+        (SUPPLIER_CODE,),
+    ) or {}
+    return {
+        "applied": applied,
+        "ambiguous": int(ambiguous.get("cnt") or 0),
+        "with_own_article": int(covered.get("cnt") or 0),
+    }
