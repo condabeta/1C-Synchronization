@@ -231,10 +231,19 @@ def match_report(conn: Connection) -> dict[str, int]:
 # Applying our articles to the catalogue
 # ---------------------------------------------------------------------------
 
-# Юлия, 22.09.2026: in 1C Fresh the article is ours - "000001" - and the Salux
-# marking goes in the comment field. So the catalogue has to carry our article
-# as the one 1C receives, with the supplier's marking alongside it rather than
-# in its place.
+# This was applied on 22.09.2026 and reversed on 23.09.2026.
+#
+# Юлия first said 1C Fresh keys Salux goods on our article ("000001") with the
+# marking in a comment, so our article was written to products.onec_code. The
+# next day Арсений overruled it: they buy and sell by Salux's own price list,
+# and - the deciding argument - **the conformity documents are issued against
+# Salux's markings**. A product sold under our own number has no certificate
+# behind that number.
+#
+# So the marking is the article again, and `apply_own_articles` exists for the
+# day they change their minds back. What it wrote is undone by
+# `clear_own_articles`. The own_articles table stays either way: it is still
+# the only place our numbers and names for these goods are recorded.
 #
 # The marking is matched with a prefix, because the importer appends a
 # disambiguating suffix to markings shared by several products
@@ -291,3 +300,24 @@ def apply_own_articles(conn: Connection) -> dict[str, int]:
         "ambiguous": int(ambiguous.get("cnt") or 0),
         "with_own_article": int(covered.get("cnt") or 0),
     }
+
+
+CLEAR_OWN_SQL = """
+    UPDATE products p
+    JOIN supplier_products sp ON sp.product_id = p.id
+    JOIN suppliers s ON s.id = sp.supplier_id AND s.code = %s
+    SET p.onec_code = sp.supplier_sku, p.updated_at = NOW()
+    -- Every Salux product, not only the ones our article had been written to:
+    -- the rest were carrying the internal key ("salux:ССдПб 02-040-004 …"),
+    -- which is ours and means nothing to the supplier or to 1C.
+    WHERE p.onec_code IS NULL OR p.onec_code <> sp.supplier_sku
+"""
+
+
+def clear_own_articles(conn: Connection) -> int:
+    """Put the supplier's marking back as the article 1C receives."""
+    with conn.cursor() as cur:
+        cur.execute(CLEAR_OWN_SQL, (SUPPLIER_CODE,))
+        changed = cur.rowcount
+    conn.commit()
+    return changed
