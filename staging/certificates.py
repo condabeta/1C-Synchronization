@@ -35,7 +35,11 @@ from staging.pricing import fold
 ARLIGHT_REGISTRY = r"D:\projects\1C\Арлайт\Reestr_dokumentov_sootvetstviya_Svetoyar.xlsx"
 CRYSTAL_REGISTRY = r"D:\projects\1C\crystal\Реестр_сертификатов_LED_CRYSTAL(2).xlsx"
 SALUX_REGISTRY = r"D:\projects\1C\Салюкс\Реестр_сертификатов_Салюкс_обновлён.xlsx"
-JAZZWAY_REGISTRY = r"D:\projects\1C\Джазвея\Джаз-Вей - Сертификаты номенклатуры.xlsx"
+JAZZWAY_REGISTRY = r"D:\projects\1C\Джазвея\Jazzway_реестр_документов_24-09-2026.xlsx"
+# The 1C report read before the proper registry arrived. It is worse - no scans,
+# some documents expired - but it covers 2,850 articles against the registry's
+# 1,860, so it still answers for the ones the registry leaves out.
+JAZZWAY_LEGACY_REGISTRY = r"D:\projects\1C\Джазвея\Джаз-Вей - Сертификаты номенклатуры.xlsx"
 
 # nsopb.ru is the register of the voluntary fire-safety certification system, and
 # nsi.eaeunion.org the EAEU register that holds state registration certificates.
@@ -214,37 +218,43 @@ def load_arlight(path: str = ARLIGHT_REGISTRY) -> tuple[list[Certificate], list[
 
 # --- Jazzway ---------------------------------------------------------------
 
-JAZZWAY_SHEET = "TDSheet"
-JAZZWAY_HEADER = "Артикул (РМ)"
+JAZZWAY_SHEET = "Сертификаты"
+JAZZWAY_HEADER_ROW = 2  # two title rows sit above the header
+JAZZWAY_ARTICLE = "Артикул Jazzway"
 
 
-def load_jazzway(path: str = JAZZWAY_REGISTRY) -> tuple[list[Certificate], list[tuple[str, str]]]:
+def load_jazzway_registry(path: str = JAZZWAY_REGISTRY) -> tuple[list[Certificate], list[tuple[str, str]]]:
     """Documents, and (document code, article) links.
 
-    The file is a 1C report: one row per article and document, the article
-    written once and left blank on the rows that follow it. The same document
-    therefore appears on hundreds of rows; it is collapsed here by its number,
-    which the registry spells consistently - no document number carries two
-    different types or dates.
+    Jazzway sent a proper registry on 24.09.2026, replacing the 1C report we
+    had been reading. It is better in the ways that matter: **every** record
+    carries a scan, 4,639 of 6,297 also carry a link to the official register,
+    and nothing in it is expired - which was the gap in the old file, where 54
+    products had nothing but out-of-date documents.
 
-    Documents have no code of their own, so they are numbered JAZ-001 upwards in
-    order of document number. Sorting keeps the numbering the same between runs
-    as long as the set of documents is.
+    One row per article and document, 1,860 articles against 166 documents, so
+    the documents are collapsed by their number. The number is written inside a
+    longer title - "Декларация о соответствии №ЕАЭС N RU Д-HK.РА05.В.56809/25" -
+    and it is the part after the № that identifies the document.
+
+    Documents have no code of their own, so they are numbered JAZ-001 upwards by
+    document number, which keeps the numbering stable between runs.
     """
-    frame = pd.read_excel(path, sheet_name=JAZZWAY_SHEET, header=None, engine="openpyxl")
-    header_index = _header_row(frame, JAZZWAY_HEADER)
-    headers = [_text(cell) or f"col{i}" for i, cell in enumerate(frame.iloc[header_index])]
+    frame = pd.read_excel(
+        path, sheet_name=JAZZWAY_SHEET, header=JAZZWAY_HEADER_ROW, engine="openpyxl"
+    )
+    frame.columns = [str(column).strip() for column in frame.columns]
 
     rows: list[dict[str, Any]] = []
-    article: str | None = None
-    for index in range(header_index + 1, len(frame)):
-        row = dict(zip(headers, frame.iloc[index].tolist()))
-        article = _text(row.get(JAZZWAY_HEADER)) or article
-        number = _text(row.get("Сертификат.Номер"))
-        if article and number:  # an article with no document at all is just skipped
-            rows.append({**row, "article": article, "number": number})
+    for record in frame.to_dict("records"):
+        article = _text(record.get(JAZZWAY_ARTICLE))
+        title = _text(record.get("Номер / название"))
+        if not article or not title:
+            continue
+        number = title.split("№", 1)[1].strip() if "№" in title else title
+        rows.append({**record, "article": article, "number": number, "title": title})
 
-    codes: dict[str, str] = {
+    codes = {
         number: f"JAZ-{position:03d}"
         for position, number in enumerate(sorted({row["number"] for row in rows}), start=1)
     }
@@ -253,9 +263,75 @@ def load_jazzway(path: str = JAZZWAY_REGISTRY) -> tuple[list[Certificate], list[
     seen: set[str] = set()
     pairs: list[tuple[str, str]] = []
     linked: set[tuple[str, str]] = set()
+
     for row in rows:
-        number = row["number"]
-        code = codes[number]
+        number, code = row["number"], codes[row["number"]]
+        if number not in seen:
+            seen.add(number)
+            registry = _text(row.get("Ссылка на реестр"))
+            scan = _text(row.get("Скан / файл"))
+            label = _text(row.get("Тип документа"))
+            kind = _kind(label)
+            official = _is_official(registry)
+            certificates.append(
+                Certificate(
+                    code=code,
+                    doc_kind=kind,
+                    doc_kind_label=label,
+                    doc_number=number,
+                    scope_text=None,  # the registry names articles, not scope
+                    regulation=None,
+                    valid_from=_date(row.get("Действует с")),
+                    valid_to=_date(row.get("Действует до")),
+                    registry_url=registry if official else None,
+                    other_url=registry if registry and not official else None,
+                    scan_url=scan,
+                    link_status=(
+                        "official" if official
+                        # A refusal letter states the goods need no certificate,
+                        # so there is no register for it to be in.
+                        else "not_required" if kind == "refusal_letter"
+                        else "unofficial" if scan
+                        else "unconfirmed"
+                    ),
+                    source="Реестр документов Jazzway, выгрузка 24.09.2026",
+                    notes=_text(row.get("Статус на дату выгрузки")),
+                )
+            )
+        if (code, row["article"]) not in linked:
+            linked.add((code, row["article"]))
+            pairs.append((code, row["article"]))
+
+    return certificates, pairs
+
+
+JAZZWAY_LEGACY_SHEET = "TDSheet"
+JAZZWAY_LEGACY_ARTICLE = "Артикул (РМ)"
+
+
+def load_jazzway_legacy(
+    path: str = JAZZWAY_LEGACY_REGISTRY,
+) -> tuple[list[Certificate], list[tuple[str, str]]]:
+    """The older 1C report, keyed by document number rather than code.
+
+    One row per article and document, the article written once and left blank
+    on the rows below it.
+    """
+    frame = pd.read_excel(path, sheet_name=JAZZWAY_LEGACY_SHEET, header=None, engine="openpyxl")
+    header_index = _header_row(frame, JAZZWAY_LEGACY_ARTICLE)
+    headers = [_text(cell) or f"col{i}" for i, cell in enumerate(frame.iloc[header_index])]
+
+    certificates: list[Certificate] = []
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    article: str | None = None
+
+    for index in range(header_index + 1, len(frame)):
+        row = dict(zip(headers, frame.iloc[index].tolist()))
+        article = _text(row.get(JAZZWAY_LEGACY_ARTICLE)) or article
+        number = _text(row.get("Сертификат.Номер"))
+        if not article or not number:
+            continue
         if number not in seen:
             seen.add(number)
             url = _text(row.get("Ссылка на ФСА"))
@@ -264,11 +340,11 @@ def load_jazzway(path: str = JAZZWAY_REGISTRY) -> tuple[list[Certificate], list[
             official = _is_official(url)
             certificates.append(
                 Certificate(
-                    code=code,
+                    code="",  # numbered later, across both sources
                     doc_kind=kind,
                     doc_kind_label=label,
                     doc_number=number,
-                    scope_text=None,  # the report names the articles, not the scope
+                    scope_text=None,
                     regulation=None,
                     valid_from=_date(row.get("Сертификат.Дата начала срока действия")),
                     valid_to=_date(row.get("Сертификат.Дата окончания срока действия")),
@@ -277,18 +353,53 @@ def load_jazzway(path: str = JAZZWAY_REGISTRY) -> tuple[list[Certificate], list[
                     scan_url=None,
                     link_status=(
                         "official" if official
-                        # A refusal letter states the goods need no certificate,
-                        # so there is no register for it to be in.
                         else "not_required" if kind == "refusal_letter"
                         else "unconfirmed"
                     ),
                     source="Выгрузка «Сертификаты номенклатуры» из 1С Джаз-Вей, 27.08.2026",
                 )
             )
-        if (code, row["article"]) not in linked:
-            linked.add((code, row["article"]))
-            pairs.append((code, row["article"]))
+        pairs.append((number, article))
+    return certificates, pairs
 
+
+def load_jazzway(path: str = JAZZWAY_REGISTRY) -> tuple[list[Certificate], list[tuple[str, str]]]:
+    """Both Jazzway sources, the newer one winning.
+
+    The September registry is the better document: every record carries a scan,
+    most carry a register link, nothing in it has expired. But it covers 1,860
+    articles where the August report covered 2,850, and an article with an old
+    document is better served than one with none. So the report fills the gaps,
+    and where both describe the same document the registry's version is kept.
+    """
+    registry_certs, registry_pairs = load_jazzway_registry(path)
+    number_of_code = {cert.code: cert.doc_number for cert in registry_certs}
+    by_number = {cert.doc_number: cert for cert in registry_certs}
+    covered = {article for _, article in registry_pairs}
+
+    legacy_certs, legacy_pairs = load_jazzway_legacy()
+    extra_pairs = [(number, article) for number, article in legacy_pairs if article not in covered]
+    needed = {number for number, _ in extra_pairs}
+    for cert in legacy_certs:
+        if cert.doc_number in needed and cert.doc_number not in by_number:
+            by_number[cert.doc_number] = cert
+
+    # Number every document once, across both sources, so a code means the same
+    # thing whichever file it came from.
+    codes = {number: f"JAZ-{position:03d}" for position, number in enumerate(sorted(by_number), start=1)}
+    certificates = []
+    for number, cert in by_number.items():
+        cert.code = codes[number]
+        certificates.append(cert)
+
+    pairs: list[tuple[str, str]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    numbered = [(number_of_code.get(code, code), article) for code, article in registry_pairs]
+    for number, article in numbered + extra_pairs:
+        code = codes.get(number)
+        if code and (code, article) not in seen_pairs:
+            seen_pairs.add((code, article))
+            pairs.append((code, article))
     return certificates, pairs
 
 
@@ -358,8 +469,29 @@ def load_crystal(path: str = CRYSTAL_REGISTRY) -> list[Certificate]:
 SALUX_DUPLICATE_OF = {2: 4}
 
 
+# Sent by the supplier on 24.09.2026, after we asked what covered the КСдУ
+# complexes. It is not in their published registry file yet, so it is written
+# here the way the LED Crystal replacement is.
+SALUX_KSDU = Certificate(
+    code="SAL-11",
+    doc_kind="declaration",
+    doc_kind_label="Декларация о соответствии",
+    doc_number="ЕАЭС N RU Д-RU.РА02.В.15175/25",
+    scope_text="Осветительные комплексы светодиодные серии КСдУ, торговой марки SALUX",
+    regulation="ТР ТС 004/2011; ТР ТС 020/2011",
+    valid_from=date(2025, 2, 20),
+    valid_to=date(2030, 2, 19),
+    registry_url="https://pub.fsa.gov.ru/rds/declaration/view/19917832/common",
+    other_url=None,
+    scan_url=None,
+    link_status="official",
+    source="Прислана поставщиком 24.09.2026",
+    notes="ТУ 27.40.39-013-10656537-2025, серийный выпуск.",
+)
+
+
 def load_salux(path: str = SALUX_REGISTRY) -> list[Certificate]:
-    certificates = []
+    certificates = [SALUX_KSDU]
     for row in _records(path, "Реестр документов", "Номер"):
         number = _row_number(row.get("№"))
         if number is None or number in SALUX_DUPLICATE_OF:
@@ -539,6 +671,8 @@ SCOPE_RULES: dict[str, list[Any]] = {
         *_series("SAL-09", "ССдО", "01", "02", "03"),
         *_series("SAL-10", "ССдВз 1Ех", "01", "02", "03", "02 db", "02 db E27"),
         *_series("SAL-10", "ССдВз Ех", "01", "02", "03"),
+        # Осветительные комплексы КСдУ, declared as a series in February 2025.
+        *_series("SAL-11", "КСдУ", "02", "03"),
     ],
 }
 
