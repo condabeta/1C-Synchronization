@@ -54,6 +54,7 @@ MIGRATIONS = [
     "add_publishing_fields.sql",
     "add_moderation_indexes.sql",
     "add_queue_supplier.sql",
+    "add_blocked_content.sql",
 ]
 
 TRACKING_TABLE = """

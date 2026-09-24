@@ -15,6 +15,7 @@ from pymysql.connections import Connection
 
 from staging.db import fetch_one
 from staging.importers.common import flush_product_batch
+from staging.blocked import apply_to_batch as apply_blocks, load_blocks
 from staging.pricing import apply_to_batch, load_rules
 
 SUPPLIER_CODE = "dekomo"
@@ -433,6 +434,7 @@ def _upsert_batch(
     # Dekomo ships an MRC/RRC column, so it has no markup rules by default and
     # this leaves the price untouched. It runs anyway so that adding a rule for
     # Dekomo later needs no code change here.
+    apply_blocks(load_blocks(conn, supplier_id), batch)
     apply_to_batch(load_rules(conn, supplier_id), batch)
 
     insert_sql = """

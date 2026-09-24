@@ -11,6 +11,7 @@ from typing import Any, Callable
 from pymysql.connections import Connection
 
 from staging.db import fetch_one
+from staging.blocked import apply_to_batch as apply_blocks, load_blocks
 from staging.pricing import apply_to_batch, load_rules
 
 
@@ -212,6 +213,9 @@ def upsert_product_batch(
 
     # Retail price is derived, not imported: the supplier's own price stays in
     # `price`, and the markup rules of this supplier produce `price_retail`.
+    # Content under a legal claim never reaches the database, however many
+    # times the supplier's feed sends it again (staging/blocked.py).
+    apply_blocks(load_blocks(conn, supplier_id), batch)
     apply_to_batch(load_rules(conn, supplier_id), batch)
 
     insert_sql = """
