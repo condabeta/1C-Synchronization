@@ -266,6 +266,22 @@ def _sync_product_images(
     if not images:
         return 0
 
+    # Images this supplier no longer sends are dropped. Suppliers move their
+    # files - Jazzway's whole library moved when they changed platform, leaving
+    # 14,273 catalogue rows pointing at 404s - and an image row that no longer
+    # resolves is worse than none. Only this supplier's downloaded-by-URL rows
+    # are touched: anything added by hand, or from a local folder, stays.
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM product_images
+            WHERE product_id = %s AND supplier_id = %s AND source_type = 'url'
+              AND stored_path IS NULL
+              AND NOT JSON_CONTAINS(CAST(%s AS JSON), JSON_QUOTE(source_path))
+            """,
+            (product_id, supplier_id, json.dumps(images, ensure_ascii=False)),
+        )
+
     known = {
         row["source_path"]
         for row in fetch_all(
