@@ -55,6 +55,16 @@ ATTR_SKIP = {ARTICLE_HEADER, BRAND_HEADER, PHOTO_HEADER, *PRICE_HEADERS, *NAME_H
 # "РРЦ_Technical_2026 NEW.xlsx" -> "Technical"
 FILE_BRAND_RE = re.compile(r"РРЦ[_\s]+(.+?)[_\s]+\d{4}", re.I)
 
+# Tape is quoted by the reel and sold by the metre. «Длина» gives the reel in
+# millimetres, and the division is exact against the shop's own prices: 35,400
+# for a 50 m reel is the 708 per metre the site charges, 175 for 5 m is 35.
+# Анна asked for the metre price and the cut multiple to stay (25.09.2026), so
+# the metre price is what the catalogue carries and the reel price is kept
+# beside it.
+LENGTH_HEADER = "Длина"
+CUT_HEADER = "Кратность Резки"
+UNIT_HEADER = "Единицы Измерения"
+
 
 @dataclass
 class SheetImage:
@@ -97,6 +107,18 @@ def read_images(path: Path) -> dict[str, dict[int, SheetImage]]:
         images[name] = found
     workbook.close()
     return images
+
+
+def _reel_length_metres(values: dict[str, Any]) -> Decimal | None:
+    """Metres on the reel, from «Длина» in millimetres or from the unit («5м»)."""
+    length = parse_decimal(values.get(LENGTH_HEADER))
+    if length and length >= 1000:  # millimetres
+        return length / Decimal(1000)
+    unit = clean(values.get(UNIT_HEADER)) or ""
+    match = re.match(r"^(\d+(?:[.,]\d+)?)\s*м$", unit)
+    if match:
+        return Decimal(match.group(1).replace(",", "."))
+    return None
 
 
 def _name_for(values: dict[str, Any], headers: dict[str, int], article: str) -> str:
@@ -150,6 +172,12 @@ def iter_maytoni_rows(
                     continue  # a section title, or an article sold on request
 
                 brand = clean(values.get(BRAND_HEADER)) or file_brand
+
+                # Per metre where the row describes a reel.
+                reel_metres = _reel_length_metres(values)
+                per_metre = None
+                if reel_metres and reel_metres > 1:
+                    per_metre = (price / reel_metres).quantize(Decimal("0.01"))
                 barcode = next((clean(values.get(h)) for h in BARCODE_HEADERS if clean(values.get(h))), None)
                 attrs = {
                     name: clean(values.get(name))
@@ -157,6 +185,10 @@ def iter_maytoni_rows(
                     if name not in ATTR_SKIP and clean(values.get(name)) not in (None, "-")
                 }
                 attrs["file"] = path.name
+                if per_metre is not None:
+                    attrs["Цена за катушку"] = str(price)
+                    attrs["Длина катушки, м"] = str(reel_metres)
+                    attrs["Цена за метр"] = str(per_metre)
                 image = sheet_images.get(row_number)
 
                 item = {
@@ -171,7 +203,9 @@ def iter_maytoni_rows(
                         part for part in (brand, clean(values.get("Коллекция")), clean(values.get("Серия"))) if part
                     ),
                     "price": price,
-                    "price_retail": price,  # РРЦ: the price Maytoni sets for the shelf
+                    # РРЦ as Maytoni sets it - per metre for tape, per piece
+                    # for everything else, which is how the shop sells them.
+                    "price_retail": per_metre if per_metre is not None else price,
                     "price_old": None,
                     "stock_qty": None,  # the price list carries no stock
                     "is_available": 1,

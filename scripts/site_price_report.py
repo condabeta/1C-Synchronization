@@ -137,6 +137,20 @@ def load_site(folder: Path) -> dict[str, dict]:
     return site
 
 
+# Maytoni sells seven brands and does not always agree with the shop about
+# which one a product belongs to: their tape file says "Led Strip" where the
+# site says "Maytoni". Treating those as the same brand would be too loose -
+# Voltega and Freya are genuinely different manufacturers - so the umbrella
+# name only matches a sub-brand, never one sub-brand against another.
+MAYTONI_FAMILY = {"technical", "outdoor", "freya", "voltega", "ledstrip", "lightingcontrol"}
+
+
+def brands_agree(ours: str, theirs: str) -> bool:
+    if ours == theirs:
+        return True
+    return ("maytoni" in (ours, theirs)) and bool({ours, theirs} & MAYTONI_FAMILY)
+
+
 def pick(ours: dict, candidates: list[dict]) -> dict | None:
     """Which of the site's products with this article is ours, if any.
 
@@ -148,7 +162,7 @@ def pick(ours: dict, candidates: list[dict]) -> dict | None:
     """
     ours_brand = brand_key(ours.get("brand"))
     if ours_brand:
-        same_brand = [c for c in candidates if brand_key(c["brand"]) == ours_brand]
+        same_brand = [c for c in candidates if brands_agree(ours_brand, brand_key(c["brand"]))]
         if same_brand:
             return same_brand[0]
         if any(brand_key(c["brand"]) for c in candidates):
