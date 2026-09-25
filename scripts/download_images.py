@@ -37,7 +37,7 @@ import time
 import urllib.error
 import urllib.request
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urlsplit, quote
 
@@ -212,8 +212,13 @@ def main() -> int:
         except Exception as exc:
             return url, None, f"{type(exc).__name__}: {str(exc)[:120]}"
 
+    # as_completed, not map: map yields in submission order, so one slow URL
+    # stalls the writer while the workers race ahead - which is how an
+    # interrupted run left 284 files on disk and nothing recorded against them.
     with db_session() as conn, ThreadPoolExecutor(max_workers=args.workers) as pool:
-        for index, (url, stored, error) in enumerate(pool.map(handle, pending), start=1):
+        futures = [pool.submit(handle, record) for record in pending]
+        for index, future in enumerate(as_completed(futures), start=1):
+            url, stored, error = future.result()
             with _write_lock, conn.cursor() as cur:
                 if stored:
                     path, digest, width, height, size = stored
@@ -224,8 +229,9 @@ def main() -> int:
                 else:
                     cur.execute(FAILED_SQL, (error, url))
                     failed += 1
+            if index % 25 == 0:
+                conn.commit()  # often, so an interrupted run keeps its work
             if index % 200 == 0:
-                conn.commit()
                 rate = index / max(time.time() - started, 1)
                 print(
                     f"  {index:,}/{len(pending):,} | ок {done:,} | ошибок {failed:,} | "

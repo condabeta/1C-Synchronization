@@ -65,6 +65,27 @@ SUPPLIERS = {
 }
 
 WORD_RE = re.compile(r"[a-zа-яё]{3,}", re.I)  # letters only: a shared number proves nothing
+
+# Words every second lighting product contains. Two products sharing only these
+# share nothing: "Потолочный светильник Lightstar Binoco" and "Светильник
+# SP-LAGERN-MOTION-L885-150W" are not the same product, and they were paired
+# because both say "светильник".
+GENERIC = {
+    "светильник", "светильники", "светильника", "лампа", "лампы", "лампочка",
+    "потолочный", "потолочная", "потолочные", "подвесной", "подвесная", "подвесные",
+    "настенный", "настенная", "встраиваемый", "встраиваемая", "накладной", "накладная",
+    "настольная", "настольный", "светодиодный", "светодиодная", "светодиодные",
+    "декоративный", "декоративная", "уличный", "уличная", "лента", "модуль",
+    "профиль", "блок", "питания", "для", "под", "теплый", "белый", "черный",
+}
+
+# The same brand, written the way each side happens to write it.
+BRAND_ALIASES = {
+    "arlight": "arlight", "арлайт": "arlight", "ардеколед": "ardecoled",
+    "maytoni": "maytoni", "майтони": "maytoni", "maytoniledstrip": "maytoni",
+    "jazzway": "jazzway", "джазвей": "jazzway", "faza": "jazzway", "фаza": "jazzway",
+    "ledcrystal": "crystal", "салюкс": "salux", "salux": "salux",
+}
 HEADER_FILL = PatternFill("solid", fgColor="DDEBF7")
 WARN_FILL = PatternFill("solid", fgColor="FCE4D6")
 
@@ -83,7 +104,12 @@ def norm(value: str | None) -> str:
 
 
 def words(text: str | None) -> set[str]:
-    return {w.lower() for w in WORD_RE.findall(text or "")}
+    return {w.lower() for w in WORD_RE.findall(text or "")} - GENERIC
+
+
+def brand_key(value: str | None) -> str:
+    key = re.sub(r"[^a-zа-яё0-9]", "", (value or "").lower())
+    return BRAND_ALIASES.get(key, key)
 
 
 def load_site(folder: Path) -> dict[str, dict]:
@@ -95,37 +121,78 @@ def load_site(folder: Path) -> dict[str, dict]:
         for row in csv.DictReader(fh):
             brands[row["manufacturer_id"]] = row["name"]
 
-    site: dict[str, dict] = {}
+    # An article is not unique on the site: 7252 is both a Voltega lamp at 214
+    # roubles and a Mantra table light at 32,108, and 052016 is both a Lightstar
+    # and an Arlight fitting. Keeping only the first meant our Arlight row was
+    # compared with somebody else's product - which is what the client caught.
+    site: dict[str, list[dict]] = {}
     with (folder / "oc_product.csv").open(encoding="utf-8", newline="") as fh:
         for row in csv.DictReader(fh):
             key = norm(row["sku"])
-            if not key or key in site:
+            if not key:
                 continue
             row["name"] = names.get(row["product_id"], "")
             row["brand"] = brands.get(row["manufacturer_id"], "")
-            site[key] = row
+            site.setdefault(key, []).append(row)
     return site
 
 
-def same_product(ours: dict, theirs: dict) -> bool:
-    if words(ours["name"]) & words(theirs["name"]):
-        return True
-    brand = (ours.get("brand") or "").lower()
-    return bool(brand) and brand in (theirs["brand"] or "").lower()
+def pick(ours: dict, candidates: list[dict]) -> dict | None:
+    """Which of the site's products with this article is ours, if any.
+
+    The brand decides. Where both sides name one and they disagree, it is a
+    different manufacturer's product that happens to share an article number -
+    reject it, however similar the names look. Only where a brand is missing
+    does the name get a say, and then it has to share a word that is not one
+    every luminaire has.
+    """
+    ours_brand = brand_key(ours.get("brand"))
+    if ours_brand:
+        same_brand = [c for c in candidates if brand_key(c["brand"]) == ours_brand]
+        if same_brand:
+            return same_brand[0]
+        if any(brand_key(c["brand"]) for c in candidates):
+            return None  # every candidate names a different manufacturer
+    for candidate in candidates:
+        if not brand_key(candidate["brand"]) and words(ours["name"]) & words(candidate["name"]):
+            return candidate
+    return None
 
 
-def match(ours: list[dict], site: dict[str, dict]) -> list[tuple[dict, dict]]:
-    pairs = []
+def match(ours: list[dict], site: dict[str, list[dict]]) -> list[tuple[dict, dict]]:
+    """Our rows paired with site products, one supplier row per site product.
+
+    Where a product reaches us from two suppliers - Arlight sells directly and
+    Dekomo resells the same fittings - the supplier whose own brand it is wins.
+    The client buys those direct, and the direct price is the right one.
+    """
+    claims: dict[str, tuple[dict, dict]] = {}
     for row in ours:
         for field in ("supplier_sku", "manufacturer_code"):
             key = norm(row[field])
-            candidates = [key] + ([key.split("_", 1)[1]] if "_" in key else [])
-            found = next((site[c] for c in candidates if c in site), None)
-            if found:
-                if same_product(row, found):
-                    pairs.append((row, found))
-                break
-    return pairs
+            keys = [key] + ([key.split("_", 1)[1]] if "_" in key else [])
+            found = next((pick(row, site[k]) for k in keys if k in site), None)
+            if not found:
+                continue
+            product_id = found["product_id"]
+            current = claims.get(product_id)
+            if current is None or beats(row, current[0], found):
+                claims[product_id] = (row, found)
+            break
+    return list(claims.values())
+
+
+DIRECT_BRANDS = {"arlight": "arlight", "jazzway": "jazzway", "salux": "salux"}
+
+
+def beats(contender: dict, holder: dict, product: dict) -> bool:
+    """Should this supplier row replace the one already claiming the product?"""
+    brand = brand_key(product["brand"])
+    contender_direct = DIRECT_BRANDS.get(brand) == contender["code"]
+    holder_direct = DIRECT_BRANDS.get(brand) == holder["code"]
+    if contender_direct != holder_direct:
+        return contender_direct
+    return False
 
 
 def decimal_or_none(value) -> Decimal | None:

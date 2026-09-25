@@ -117,14 +117,18 @@ def parse_excel_price(excel_path: str) -> dict[str, dict[str, Any]]:
 # brand at the head of the trailing parentheses. The XML's <brand> is a numeric
 # id (18,138 of 19,451 products are brand "4") and the feed ships no dictionary
 # for it, so every card would have shown "4" as its manufacturer.
-BRAND_IN_NAME_RE = re.compile(r"\(([^(),]{2,40})[,)]")
+# The brand is the first word of a parenthesised group, followed by a comma:
+# "(Arlight, IP20 Металл, 3 года)". Requiring that comma is what separates the
+# brand from a nested aside - "(Arlight, 5мм (цилиндр))" was read as "цилиндр"
+# until it was added, and 18,138 products were branded that way.
+BRAND_IN_NAME_RE = re.compile(r"\(\s*([^(),]{2,40}?)\s*,")
 
 
 def brand_from_name(name: str | None) -> str | None:
     matches = BRAND_IN_NAME_RE.findall(name or "")
     for candidate in reversed(matches):  # the brand group is the last one
         text = candidate.strip()
-        if text and not text.isdigit():
+        if len(text) >= 3 and not text.isdigit():
             return text
     return None
 
