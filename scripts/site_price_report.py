@@ -61,7 +61,7 @@ DEFAULT_MAX_CHANGE = 5.0
 
 SUPPLIERS = {
     "dekomo": "Декомо", "arlight": "Арлайт", "swg": "SWG", "jazzway": "Jazzway",
-    "salux": "Салюкс", "crystal": "LED Crystal", "viasvet": "ВиаСвет",
+    "salux": "Салюкс", "crystal": "LED Crystal", "viasvet": "ВиаСвет", "maytoni": "Майтони",
 }
 
 WORD_RE = re.compile(r"[a-zа-яё]{3,}", re.I)  # letters only: a shared number proves nothing
@@ -182,7 +182,16 @@ def match(ours: list[dict], site: dict[str, list[dict]]) -> list[tuple[dict, dic
     return list(claims.values())
 
 
-DIRECT_BRANDS = {"arlight": "arlight", "jazzway": "jazzway", "salux": "salux"}
+# Brands the client buys direct. Where the same product also comes through
+# Dekomo, the direct supplier's price is the one that counts - that is what
+# Анна asked for on 25.09.2026, first for Arlight and then for Maytoni, whose
+# price list covers seven brands under one roof.
+DIRECT_BRANDS = {
+    "arlight": "arlight", "jazzway": "jazzway", "salux": "salux",
+    "maytoni": "maytoni", "technical": "maytoni", "outdoor": "maytoni",
+    "freya": "maytoni", "voltega": "maytoni", "ledstrip": "maytoni",
+    "lightingcontrol": "maytoni",
+}
 
 
 def beats(contender: dict, holder: dict, product: dict) -> bool:
