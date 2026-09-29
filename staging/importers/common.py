@@ -38,7 +38,12 @@ def parse_decimal(value: Any) -> Decimal | None:
     text = clean(value)
     if not text or text.lower() == "nan":
         return None
-    text = text.replace(" ", "").replace(",", ".")
+    # Excel writes a number typed as text with a non-breaking or narrow space
+    # for thousands - "5 929,61" - and four Точка Зрения prices arrived that
+    # way, which read as no price at all until 29.09.2026.
+    for space in (" ", " ", " ", " "):
+        text = text.replace(space, "")
+    text = text.replace(",", ".")
     try:
         return Decimal(text)
     except InvalidOperation:

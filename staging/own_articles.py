@@ -31,6 +31,11 @@ from staging.pricing import as_decimal
 DEFAULT_XLSX_PATH = r"D:\projects\1C\Виа Свет\светнн1.xlsx"
 # Whose goods these are. Every marking in the file is a Salux one.
 SUPPLIER_CODE = "salux"
+# What the site calls their manufacturer. Our articles run 000001 upwards, and
+# so do those of Точка Зрения and SWG - on the site the same number is carried
+# by up to three different products, told apart by this column alone. Анна found
+# it on 29.09.2026, in article 000001.
+SITE_MANUFACTURER = "Россия"
 
 # Column 1's header text is "Пожаробезопасные светильники" - a section caption
 # left in the header row - but its values are the categories, so it is read as
@@ -158,15 +163,15 @@ def iter_own_articles(
 
 UPSERT_SQL = """
     INSERT INTO own_articles (
-        own_sku, own_name, supplier_id, supplier_marking, supplier_name,
+        own_sku, own_name, supplier_id, site_manufacturer, supplier_marking, supplier_name,
         dealer_price, category, attributes_json, source_file
     ) VALUES (
-        %(own_sku)s, %(own_name)s, %(supplier_id)s, %(supplier_marking)s, %(supplier_name)s,
-        %(dealer_price)s, %(category)s, %(attributes_json)s, %(source_file)s
+        %(own_sku)s, %(own_name)s, %(supplier_id)s, %(site_manufacturer)s, %(supplier_marking)s,
+        %(supplier_name)s, %(dealer_price)s, %(category)s, %(attributes_json)s, %(source_file)s
     )
     ON DUPLICATE KEY UPDATE
         own_name = VALUES(own_name),
-        supplier_id = VALUES(supplier_id),
+        site_manufacturer = VALUES(site_manufacturer),
         supplier_marking = VALUES(supplier_marking),
         supplier_name = VALUES(supplier_name),
         dealer_price = VALUES(dealer_price),
@@ -191,6 +196,7 @@ def load_own_articles(
             {
                 **item,
                 "supplier_id": supplier_id,
+                "site_manufacturer": SITE_MANUFACTURER,
                 "attributes_json": json.dumps(item["attributes_json"], ensure_ascii=False),
                 "source_file": xlsx_path.name[:255],
             }
@@ -201,6 +207,46 @@ def load_own_articles(
             cur.executemany(UPSERT_SQL, rows)
         conn.commit()
     return len(rows)
+
+
+def save_own_articles(
+    conn: Connection,
+    supplier_code: str,
+    rows: list[dict[str, Any]],
+    *,
+    source_file: str,
+) -> int:
+    """Write another supplier's own articles through the same table.
+
+    Salux's list is read by `load_own_articles` above, which knows that file's
+    fourteen columns. Точка Зрения's has eight and a different meaning for each,
+    so its importer shapes the rows and hands them here. The unique key is
+    (supplier, article), so the two lists sit side by side even where they use
+    the same number - which, from 000001 to 000073, they do.
+    """
+    supplier = fetch_one(conn, "SELECT id FROM suppliers WHERE code = %s", (supplier_code,))
+    if not supplier:
+        raise RuntimeError(f"Supplier '{supplier_code}' not found")
+
+    prepared = [
+        {
+            "supplier_marking": None,
+            "supplier_name": None,
+            "dealer_price": None,
+            "category": None,
+            "site_manufacturer": None,
+            **row,
+            "supplier_id": supplier["id"],
+            "attributes_json": json.dumps(row.get("attributes_json") or {}, ensure_ascii=False),
+            "source_file": source_file[:255],
+        }
+        for row in rows
+    ]
+    if prepared:
+        with conn.cursor() as cur:
+            cur.executemany(UPSERT_SQL, prepared)
+        conn.commit()
+    return len(prepared)
 
 
 def match_report(conn: Connection) -> dict[str, int]:

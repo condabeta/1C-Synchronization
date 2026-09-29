@@ -56,6 +56,7 @@ MIGRATIONS = [
     "add_queue_supplier.sql",
     "add_blocked_content.sql",
     "add_maytoni.sql",
+    "add_tochka_zreniya.sql",
 ]
 
 TRACKING_TABLE = """
