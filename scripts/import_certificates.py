@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 """Load conformity documents and link them to products.
 
-Reads the Arlight, Jazzway, LED Crystal and Salux registries. Arlight and
-Jazzway name their articles, so their links come straight from the registry;
-LED Crystal and Salux documents are matched to products by series through the
-rules in staging/certificates.py. Re-running is safe: each supplier's documents
-and links are replaced as a whole.
+Reads the Arlight, Jazzway, Dekomo, LED Crystal and Salux registries. Arlight,
+Jazzway and Dekomo name their articles, so their links come straight from the
+registry; LED Crystal and Salux documents are matched to products by series
+through the rules in staging/certificates.py. Re-running is safe: each
+supplier's documents and links are replaced as a whole.
 
     python scripts/import_certificates.py --dry-run
     python scripts/import_certificates.py
@@ -63,6 +63,15 @@ def dry_run() -> int:
             f"связей с нашим прайсом {len(links):,} на {len({sku for _, sku, _, _ in links})} товаров"
         )
         print("   ", dict(Counter(c.link_status for c in certs)))
+        certs, pairs = C.load_dekomo()
+        links = C.dekomo_links(conn, pairs)
+        articles = {article for source in pairs.values() for _, article in source}
+        print(
+            f"Декомо: {len(certs)} документов | артикулов в источниках {len(articles):,} | "
+            f"связей с нашим прайсом {len(links):,} на {len({sku for _, sku, _, _ in links}):,} товаров"
+        )
+        print("   ", dict(Counter(c.link_status for c in certs)))
+
         for supplier, loader in (("crystal", C.load_crystal), ("salux", C.load_salux)):
             certs = loader()
             products = C.supplier_products(conn, supplier)

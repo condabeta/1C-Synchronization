@@ -1,11 +1,11 @@
 """Conformity documents and the products they cover.
 
 The site needs a registry link on each product page - a declaration or
-certificate that can be checked in the official register. Three suppliers
-publish registries, and they bind documents to products in two ways:
+certificate that can be checked in the official register. Five suppliers give us
+something to work from, and they bind documents to products in two ways:
 
-* Arlight and Jazzway list every document against explicit article numbers.
-  Those are loaded as they are.
+* Arlight, Jazzway and Dekomo name explicit article numbers. Those are loaded as
+  they are.
 * LED Crystal and Salux publish documents by series, in prose: "серии LB, LT",
   "ССдВз 1Ex 01; ССдВз 1Ex 02 db". There are only 17 such documents, so they are
   matched through the rule table below rather than by parsing the prose. A table
@@ -13,18 +13,23 @@ publish registries, and they bind documents to products in two ways:
   registry warns that binding by series needs an article-to-series table from the
   supplier, so every series link is marked as such and can be audited.
 
-Dekomo, SWG and ViaSvet publish nothing usable, so their products get no
-documents here.
+Dekomo has no registry of its own; what it has is an archive of scans collected
+from the brands, and two files inside it that name articles. See the Dekomo
+section below for what is read and what is left alone.
+
+SWG and ViaSvet publish nothing usable, so their products get no documents.
 """
 
 from __future__ import annotations
 
 import re
+import zipfile
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable
 
+import openpyxl
 import pandas as pd
 from pymysql.connections import Connection
 
@@ -529,6 +534,284 @@ def load_salux(path: str = SALUX_REGISTRY) -> list[Certificate]:
     return certificates
 
 
+# --- Dekomo ----------------------------------------------------------------
+
+# Dekomo publishes no registry of its own, and until now its 191,720 products
+# carried no documents at all. On 29.09.2026 the client forwarded an archive of
+# scans collected from the brands - 89 files covering some twenty-five of them.
+# Two files in it are article-level tables rather than scans, and those are what
+# is read here: EGLO's own article-to-document sheet, and an Apeyron stock
+# report that names the document on every line. The rest of the archive binds a
+# document to a brand or a product type rather than to articles, which this
+# table cannot express, so it stays on disk until the client says how those
+# should be shown.
+#
+# Both files write the bare article while Dekomo's price list prefixes it with
+# the brand - EG_83998, AR_A8392AP-2SS. `manufacturer_code` holds the bare form.
+# One bare article can belong to several price list rows, so a document reaches
+# every row that carries it.
+
+DEKOMO_ARCHIVE = r"D:\projects\1C\Декомо\Сертификаты и декларации Декомо"
+DEKOMO_EGLO_REGISTRY = DEKOMO_ARCHIVE + r"\соответствие артикулов ЭГЛО сертификатам!!!(1).xlsx"
+DEKOMO_APEYRON_REGISTRY = DEKOMO_ARCHIVE + r"\Apeyron_electrics_OGM_реестр.xlsx"
+
+# Which brands each file speaks for. An article is matched only inside its own
+# brands: Dekomo articles are short and repeat across brands, and a document
+# hung on the wrong product is worse than no document at all. The Apeyron report
+# covers six brands; we carry three of them.
+DEKOMO_SOURCE_BRANDS = {
+    "eglo": ("EGLO",),
+    "apeyron": ("APEYRON ELECTRICS", "APEYRON CLOCK", "OGM"),
+}
+
+
+def _dekomo_article(value: Any) -> str | None:
+    """The article as the files write it: whole numbers arrive as floats, and a
+    few are typed with Excel's leading apostrophe ("'GL-556")."""
+    if isinstance(value, float) and not pd.isna(value) and value.is_integer():
+        value = int(value)
+    text = _text(value)
+    if not text:
+        return None
+    return text.lstrip("'").strip() or None
+
+
+def _short_year_date(value: Any) -> date | None:
+    """Apeyron writes dates as 14.08.25, where `_date` wants four digits."""
+    full = _date(value)
+    if full:
+        return full
+    match = re.fullmatch(r"(\d{1,2})\.(\d{1,2})\.(\d{2})", _text(value) or "")
+    if not match:
+        return None
+    day, month, year = (int(part) for part in match.groups())
+    return date(2000 + year, month, day)
+
+
+# The two document columns are filled by hand and do not always hold a document.
+# Some cells say there is none ("нет сертификата", "не подлежит сертификации"),
+# some give the reason one is not needed ("аксессуар", "крепление"), and two name
+# documents that have since been annulled. None of these may reach a product
+# page as a certificate, so they are dropped rather than stored: a product with
+# nothing to show is correct, a product showing "нет сертификата" as its document
+# is not. Everything here is compared through `fold`, because one of the two
+# spellings of "санкционный код" starts with a Latin c.
+EGLO_NOT_A_DOCUMENT = frozenset({
+    "нет документа", "нет сертификата", "нет сс", "не подлежит",
+    "не подлежит сертификации", "отриц решение", "отказное письмо",
+    "аксессуар", "зигби", "крепление", "прожектор", "санкционный код",
+})
+
+
+def _eglo_document_number(value: Any) -> str | None:
+    """The document number, or None where the cell is not a document."""
+    number = _text(value)
+    if not number:
+        return None
+    folded = fold(number)
+    if folded in EGLO_NOT_A_DOCUMENT or "аннулир" in folded:
+        return None
+    return number
+
+
+EGLO_SOURCE = "Таблица соответствия артикулов EGLO сертификатам, архив Декомо 29.09.2026"
+
+
+def load_dekomo_eglo(
+    path: str = DEKOMO_EGLO_REGISTRY,
+) -> tuple[list[Certificate], list[tuple[str, str]]]:
+    """Documents, and (document code, bare article) links.
+
+    One row per article, naming a certificate and usually a declaration with the
+    validity of each. 20,738 rows resolve to 76 certificates and 14 declarations:
+    the sheet repeats the document on every article it covers.
+
+    Both links share one cell, separated by a line break, and are told apart by
+    their path - the register files certificates under /rss/certificate/ and
+    declarations under /rds/declaration/. 9,020 rows carry no link; the document
+    is still recorded, without one.
+    """
+    frame = pd.read_excel(path, sheet_name=0, header=0, engine="openpyxl")
+
+    documents: dict[str, dict[str, Any]] = {}
+    pairs: set[tuple[str, str]] = set()
+
+    for record in frame.to_dict("records"):
+        values = list(record.values())
+        article = _dekomo_article(values[0])
+        if not article:
+            continue
+        urls = [url.strip() for url in str(values[7]).split("\n")] if _text(values[7]) else []
+        certificate_url = next((url for url in urls if "/certificate/" in url), None)
+        declaration_url = next((url for url in urls if "/declaration/" in url), None)
+
+        for number, kind, label, valid_from, valid_to, url in (
+            (_eglo_document_number(values[1]), "certificate", "Сертификат соответствия",
+             values[3], values[4], certificate_url),
+            (_eglo_document_number(values[2]), "declaration", "Декларация о соответствии",
+             values[5], values[6], declaration_url),
+        ):
+            if not number:
+                continue
+            # A few cells name a decision or an information letter rather than a
+            # certificate. The column says which document it ought to be, the
+            # text says what it is, and the text wins.
+            if "письмо" in fold(number) or "решение" in fold(number):
+                kind, label = "other", "Письмо / решение"
+            documents.setdefault(number, {
+                "kind": kind,
+                "label": label,
+                "valid_from": _date(valid_from),
+                "valid_to": _date(valid_to),
+                "url": url,
+            })
+            # The link cell is empty on most rows, so the first row that carries
+            # one answers for the document.
+            if url and not documents[number]["url"]:
+                documents[number]["url"] = url
+            pairs.add((number, article))
+
+    codes = {
+        number: f"DEK-EGL-{position:03d}"
+        for position, number in enumerate(sorted(documents), start=1)
+    }
+    certificates = [
+        Certificate(
+            code=codes[number],
+            doc_kind=document["kind"],
+            doc_kind_label=document["label"],
+            doc_number=number,
+            scope_text=None,  # the sheet names articles, not scope
+            regulation=None,
+            valid_from=document["valid_from"],
+            valid_to=document["valid_to"],
+            registry_url=document["url"] if _is_official(document["url"]) else None,
+            other_url=None,
+            scan_url=None,
+            link_status="official" if _is_official(document["url"]) else "unconfirmed",
+            source=EGLO_SOURCE,
+        )
+        for number, document in sorted(documents.items())
+    ]
+    return certificates, sorted((codes[number], article) for number, article in pairs)
+
+
+APEYRON_SOURCE = "Отчёт «Apeyron electrics OGM», остатки на 28.08.2026, архив Декомо"
+APEYRON_FIRST_DATA_ROW = 9  # the header spans rows 7 and 8
+APEYRON_COLUMNS = {"article": 2, "brand": 4, "number": 6, "issued": 7,
+                   "authority": 8, "valid_to": 9, "label": 10}
+
+
+def _apeyron_registry_urls(path: str) -> dict[int, str]:
+    """Sheet row -> register link.
+
+    The links are HYPERLINK() formulas rather than stored hyperlinks, so a
+    data_only read hands back only their caption, "Открыть карточку".
+    """
+    with zipfile.ZipFile(path) as archive:
+        sheet = archive.read("xl/worksheets/sheet1.xml").decode("utf-8", "replace")
+    found = re.findall(
+        r'<(?:\w+:)?c r="M(\d+)"[^>]*>\s*<(?:\w+:)?f>HYPERLINK\("([^"]+)"', sheet
+    )
+    return {int(row): url for row, url in found}
+
+
+def load_dekomo_apeyron(
+    path: str = DEKOMO_APEYRON_REGISTRY,
+) -> tuple[list[Certificate], list[tuple[str, str]]]:
+    """Documents, and (document code, bare article) links.
+
+    A stock report rather than a registry: one row per article, with the
+    document that covers it written alongside. 3,120 rows name 60 documents,
+    1,610 of them carrying a link to the state register. 1,138 rows name no
+    document at all and are passed over.
+
+    A third of the documents are refusal and explanatory letters, which state
+    the goods need no certificate. They have no register entry by definition, so
+    they are marked `not_required` rather than left unconfirmed.
+    """
+    workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    sheet = workbook[workbook.sheetnames[0]]
+    urls = _apeyron_registry_urls(path)
+
+    documents: dict[str, dict[str, Any]] = {}
+    pairs: set[tuple[str, str]] = set()
+
+    for row_number, row in enumerate(
+        sheet.iter_rows(min_row=APEYRON_FIRST_DATA_ROW, values_only=True),
+        start=APEYRON_FIRST_DATA_ROW,
+    ):
+        def column(name: str) -> Any:
+            position = APEYRON_COLUMNS[name]
+            return row[position] if position < len(row) else None
+
+        article = _dekomo_article(column("article"))
+        number = _text(column("number"))
+        if not article or not number:
+            continue
+        label = _text(column("label"))
+        documents.setdefault(number, {
+            "label": label,
+            "kind": _kind(label),
+            "valid_from": _short_year_date(column("issued")),
+            "valid_to": _short_year_date(column("valid_to")),
+            "authority": _text(column("authority")),
+            "url": urls.get(row_number),
+        })
+        if urls.get(row_number) and not documents[number]["url"]:
+            documents[number]["url"] = urls[row_number]
+        pairs.add((number, article))
+
+    workbook.close()
+
+    codes = {
+        number: f"DEK-APR-{position:03d}"
+        for position, number in enumerate(sorted(documents), start=1)
+    }
+    certificates = []
+    for number, document in sorted(documents.items()):
+        official = _is_official(document["url"])
+        # "Отказное письмо" and "Разъяснительное письмо" both say the product
+        # falls outside mandatory certification. Neither is in a register.
+        exempt = (
+            document["kind"] == "refusal_letter"
+            or "письмо" in (document["label"] or "").lower()
+        )
+        certificates.append(
+            Certificate(
+                code=codes[number],
+                doc_kind=document["kind"],
+                doc_kind_label=document["label"],
+                doc_number=number,
+                scope_text=None,
+                regulation=None,
+                valid_from=document["valid_from"],
+                valid_to=document["valid_to"],
+                registry_url=document["url"] if official else None,
+                other_url=document["url"] if document["url"] and not official else None,
+                scan_url=None,
+                link_status="official" if official else "not_required" if exempt else "unconfirmed",
+                source=APEYRON_SOURCE,
+                notes=document["authority"],
+            )
+        )
+    return certificates, sorted((codes[number], article) for number, article in pairs)
+
+
+def load_dekomo() -> tuple[list[Certificate], dict[str, list[tuple[str, str]]]]:
+    """Every Dekomo document, and its links grouped by the file they came from.
+
+    The grouping is kept because each file answers for its own brands, and the
+    article has to be resolved inside them.
+    """
+    eglo_certificates, eglo_pairs = load_dekomo_eglo()
+    apeyron_certificates, apeyron_pairs = load_dekomo_apeyron()
+    return (
+        eglo_certificates + apeyron_certificates,
+        {"eglo": eglo_pairs, "apeyron": apeyron_pairs},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Series rules
 # ---------------------------------------------------------------------------
@@ -822,6 +1105,48 @@ def jazzway_links(
     return [(code, index[article], "explicit", None) for code, article in pairs if article in index]
 
 
+def dekomo_links(
+    conn: Connection, pairs_by_source: dict[str, list[tuple[str, str]]]
+) -> list[tuple[str, str, str, str | None]]:
+    """Registry links for the articles we actually carry.
+
+    The two source files write the bare article - 83998 - while Dekomo's price
+    list writes EG_83998, so the join runs through `manufacturer_code`. One bare
+    article can sit on several price list rows, and the document covers all of
+    them, so a pair can produce more than one link.
+
+    The lookup is built per source file and restricted to that file's brands.
+    Dekomo articles are short and repeat across brands, so an unrestricted join
+    would hang EGLO's certificate on someone else's product.
+    """
+    links: list[tuple[str, str, str, str | None]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for source, pairs in pairs_by_source.items():
+        brands = DEKOMO_SOURCE_BRANDS[source]
+        placeholders = ", ".join(["%s"] * len(brands))
+        index: dict[str, list[str]] = {}
+        for row in fetch_all(
+            conn,
+            f"""
+            SELECT UPPER(TRIM(sp.manufacturer_code)) AS article, sp.supplier_sku
+            FROM supplier_products sp JOIN suppliers s ON s.id = sp.supplier_id
+            WHERE s.code = 'dekomo' AND sp.manufacturer_code IS NOT NULL
+              AND UPPER(TRIM(sp.brand)) IN ({placeholders})
+            """,
+            brands,
+        ):
+            index.setdefault(row["article"], []).append(row["supplier_sku"])
+
+        for code, article in pairs:
+            for sku in index.get(article.upper(), ()):
+                if (code, sku) not in seen:
+                    seen.add((code, sku))
+                    links.append((code, sku, "explicit", None))
+
+    return links
+
+
 def load_all(conn: Connection, progress: Callable[[str], None] = print) -> list[LoadResult]:
     results = []
 
@@ -833,6 +1158,11 @@ def load_all(conn: Connection, progress: Callable[[str], None] = print) -> list[
     links = jazzway_links(conn, pairs)
     progress(f"Jazzway: {len(certs)} документов, {len(links):,} связей с артикулами")
     results.append(save(conn, "jazzway", certs, links))
+
+    certs, pairs = load_dekomo()
+    links = dekomo_links(conn, pairs)
+    progress(f"Декомо: {len(certs)} документов, {len(links):,} связей с артикулами")
+    results.append(save(conn, "dekomo", certs, links))
 
     for supplier, loader in (("crystal", load_crystal), ("salux", load_salux)):
         certs = loader()
