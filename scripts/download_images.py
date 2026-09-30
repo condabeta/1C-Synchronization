@@ -47,7 +47,26 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+import os
+
+import staging.config  # noqa: F401  - loads config.env into the environment
 from staging.db import db_session, fetch_all, fetch_one
+
+# Some hosts serve a dealer's files only to a logged-in session. Arlight's CDN
+# (assets.transistor.ru) 403s without both the session cookie and a referer from
+# its own price page, so those travel with every request to that host. The
+# session is captured by hand from the browser into config.env; when it is not
+# set, the host is fetched like any other and simply returns 403.
+HOST_HEADERS: dict[str, dict[str, str]] = {}
+if os.getenv("ARLIGHT_COOKIE"):
+    HOST_HEADERS["assets.transistor.ru"] = {
+        "Cookie": os.environ["ARLIGHT_COOKIE"],
+        "Referer": os.getenv("ARLIGHT_REFERER", "https://assets.transistor.ru/"),
+        # This host checks the session against a browser-shaped request; its own
+        # bot UA is fine everywhere else but is refused here.
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+    }
 
 IMAGES_DIR = Path(r"D:\projects\1C\images")
 MAX_SIDE = 1600
@@ -71,6 +90,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=None, help="Stop after this many URLs")
     parser.add_argument("--out", type=Path, default=IMAGES_DIR, help="Where to keep the files")
     parser.add_argument("--workers", type=int, default=WORKERS)
+    parser.add_argument("--delay", type=float, default=HOST_DELAY,
+                        help="Pause between requests to one host. Dekomo's photos are 36 KB and "
+                             "its server is fine with more; Jazzway ships 1.4 MB files.")
     parser.add_argument("--max-side", type=int, default=MAX_SIDE, help="Longest side in pixels (0 = keep original)")
     parser.add_argument("--dry-run", action="store_true", help="Report what is left to fetch, download nothing")
     return parser.parse_args()
@@ -93,7 +115,8 @@ def fetch(url: str) -> bytes:
                 time.sleep(wait)
             _host_last[host] = time.monotonic()
         try:
-            request = urllib.request.Request(encode_url(url), headers={"User-Agent": USER_AGENT})
+            headers = {"User-Agent": USER_AGENT, **HOST_HEADERS.get(host, {})}
+            request = urllib.request.Request(encode_url(url), headers=headers)
             with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
                 return response.read()
         except urllib.error.HTTPError as exc:
@@ -199,6 +222,8 @@ def main() -> int:
     if args.dry_run or not pending:
         return 0
 
+    global HOST_DELAY
+    HOST_DELAY = args.delay
     args.out.mkdir(parents=True, exist_ok=True)
     done = failed = skipped_rows = 0
     bytes_written = 0
