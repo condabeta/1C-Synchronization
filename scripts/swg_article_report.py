@@ -1,21 +1,29 @@
 #!/usr/bin/env python
-"""Turn the site's short SWG articles into SWG's own eleven-character codes.
+"""How the site's SWG articles line up with SWG's own numbering.
 
     python scripts/swg_article_report.py
 
-Анна asked on 30.09.2026 whether the articles of this brand could be made
-eleven-digit automatically rather than by hand, the way the price list writes
-them. They can, and no matching is needed: SWG writes the same number, prefixed
-with "00-" and padded to eight digits. The site's 045488 is their 00-00045488.
+Анна asked on 30.09.2026 why SWG's price list writes an article in six digits
+while their 1C export writes eleven, and whether the site should be made to
+match the longer form automatically.
 
-The rule finds 1,145 of the 1,379 SWG products on the site. The remaining 234
-are not in the September price list at all - discontinued, as Анна said of
-002033 - and those are listed separately rather than converted, because a code
-that is not in the price list is worse than the short number it replaced.
+It should not, because there is nothing to fix. The two are one number: their 1C
+prefixes "00-" and pads to eight digits, so the price list's 044571 and the
+export's 00-00044571 are the same article, and the site already carries the
+six-digit form the price list uses. The PDF of 25.09.2026 confirms it - 3,993 of
+its 6,093 articles are in our feed under exactly that transformation.
 
-This also settles the articles this brand shares with Salux and Точка Зрения.
-Once an SWG product carries 00-00002325, no other supplier's 002325 can be
-confused with it.
+Which also settles who is responsible for the articles shared with Salux and
+Точка Зрения, and it is not SWG. Of the 110 SWG products on the site whose
+number also appears in one of our hand-made lists, 107 of those numbers are
+genuinely SWG's own. The clash is that our hand-made numbers were issued from
+000001 upwards, into the range SWG's own low articles already occupied. So the
+lengthening belongs on the hand-made side: the Salux goods are already moving to
+their marking, which leaves 283 articles shared with Точка Зрения to renumber.
+
+This report is kept for the mapping it prints, which is what shows the above,
+and for its second sheet: the 234 site articles with no counterpart in the feed.
+Against the newer PDF only 42 are genuinely gone.
 
 Reads the site CSV exports rather than the site itself.
 """
