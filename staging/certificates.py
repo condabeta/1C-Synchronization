@@ -22,6 +22,7 @@ SWG and ViaSvet publish nothing usable, so their products get no documents.
 
 from __future__ import annotations
 
+import json
 import re
 import zipfile
 from dataclasses import dataclass, field
@@ -38,6 +39,11 @@ from staging.importers.jazzway_feed import order_code_for
 from staging.pricing import fold
 
 ARLIGHT_REGISTRY = r"D:\projects\1C\Арлайт\Reestr_dokumentov_sootvetstviya_Svetoyar.xlsx"
+# The dealer portal's own export (assets.transistor.ru, Version 3), downloaded
+# 30.09.2026. It carries the registry card id of every document, so the official
+# FSA link is built rather than guessed, and lists the articles each covers - a
+# far fuller source than the hand-kept registry above, which it replaces.
+ARLIGHT_JSON = r"D:\projects\1C\certificates.json"
 CRYSTAL_REGISTRY = r"D:\projects\1C\crystal\Реестр_сертификатов_LED_CRYSTAL(2).xlsx"
 SALUX_REGISTRY = r"D:\projects\1C\Салюкс\Реестр_сертификатов_Салюкс_обновлён.xlsx"
 JAZZWAY_REGISTRY = r"D:\projects\1C\Джазвея\Jazzway_реестр_документов_24-09-2026.xlsx"
@@ -218,6 +224,95 @@ def load_arlight(path: str = ARLIGHT_REGISTRY) -> tuple[list[Certificate], list[
         for code, sku in zip(links["ID документа"], links["Артикул поставщика"])
         if isinstance(code, str) and isinstance(sku, str) and code.strip() and sku.strip()
     ]
+    return certificates, pairs
+
+
+# The dealer portal numbers a document's kind. 1 is a certificate, 2 a
+# declaration, 3 a letter (an отказное - the product needs no mandatory
+# document), 4 a placeholder for one not issued yet.
+ARLIGHT_JSON_KIND = {1: "certificate", 2: "declaration", 3: "refusal_letter", 4: "other"}
+ARLIGHT_JSON_KIND_LABEL = {1: "Сертификат", 2: "Декларация", 3: "Отказное письмо", 4: "В ожидании"}
+# How pub.fsa.gov.ru addresses a card, given the registry id the feed carries.
+ARLIGHT_FSA_PATH = {1: "rss/certificate", 2: "rds/declaration"}
+
+
+def _arlight_json_date(value: str | None) -> date | None:
+    """The feed writes ISO dates (2024-08-14); a missing one comes as null."""
+    text = _text(value)
+    if not text:
+        return None
+    match = re.search(r"(\d{4})-(\d{2})-(\d{2})", text)
+    if not match:
+        return None
+    year, month, day = (int(part) for part in match.groups())
+    return date(year, month, day)
+
+
+def load_arlight_json(path: str = ARLIGHT_JSON) -> tuple[list[Certificate], list[tuple[str, str]]]:
+    """Documents and (document code, article) links from the dealer export.
+
+    The scan PDFs sit behind the dealer login (assets.transistor.ru answers 403
+    without a session), so they are not stored as a public scan. The registry
+    link is public and official, and is what the site needs; a document with a
+    registry id gets its FSA card, the letters and pending rows do not.
+    """
+    with open(path, encoding="utf-8") as handle:
+        payload = json.load(handle)
+    rows = payload["data"]["certificates"]
+
+    certificates: list[Certificate] = []
+    pairs: list[tuple[str, str]] = []
+    for row in rows:
+        code = _text(str(row.get("code")))
+        if not code:
+            continue
+        kind_id = row.get("type")
+        number = _text(row.get("number"))
+        registry_id = _text(row.get("link"))
+        pending = kind_id == 4 or (number or "").lower().startswith("в ожида")
+
+        registry_url = None
+        if registry_id and kind_id in ARLIGHT_FSA_PATH:
+            registry_url = f"https://pub.fsa.gov.ru/{ARLIGHT_FSA_PATH[kind_id]}/view/{registry_id}/common"
+
+        if pending:
+            link_status = "pending"
+        elif registry_url:
+            link_status = "official"
+        elif kind_id == 3:
+            # A letter states the goods need no mandatory document - there is no
+            # register to link, and that is the answer, not a gap.
+            link_status = "not_required"
+        else:
+            link_status = "unconfirmed"
+
+        label = ARLIGHT_JSON_KIND_LABEL.get(kind_id, "Документ")
+        if row.get("not_required") == 1 and kind_id in (1, 2):
+            label += " (добровольная)"  # voluntary confirmation, not mandatory
+
+        certificates.append(
+            Certificate(
+                code=code,
+                doc_kind="refusal_letter" if kind_id == 3 else _kind(label),
+                doc_kind_label=label,
+                doc_number=number,
+                scope_text=_text(row.get("textshort")) or _text(row.get("textfull")),
+                regulation=None,
+                valid_from=_arlight_json_date(row.get("registered")),
+                valid_to=_arlight_json_date(row.get("dateto")),
+                registry_url=registry_url,
+                other_url=None,
+                scan_url=None,  # the PDF is dealer-login only, not a public scan
+                link_status=link_status,
+                source="Дилерский портал Arlight (v3)",
+                notes=None,
+            )
+        )
+        for article in row.get("products") or []:
+            sku = _text(article)
+            if sku:
+                pairs.append((code, sku))
+
     return certificates, pairs
 
 
@@ -1150,7 +1245,7 @@ def dekomo_links(
 def load_all(conn: Connection, progress: Callable[[str], None] = print) -> list[LoadResult]:
     results = []
 
-    certs, pairs = load_arlight()
+    certs, pairs = load_arlight_json()
     progress(f"Арлайт: {len(certs)} документов, {len(pairs):,} связей с артикулами")
     results.append(save(conn, "arlight", certs, [(c, s, "explicit", None) for c, s in pairs]))
 

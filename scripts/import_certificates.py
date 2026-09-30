@@ -51,7 +51,7 @@ def print_coverage(rows: list[dict]) -> None:
 
 
 def dry_run() -> int:
-    certs, pairs = C.load_arlight()
+    certs, pairs = C.load_arlight_json()
     print(f"Арлайт: {len(certs)} документов, {len(pairs):,} связей с артикулами")
     print("   ", dict(Counter(c.link_status for c in certs)))
     with db_session() as conn:
