@@ -34,6 +34,8 @@ sync_outbox ──► 1C Fresh ──► OpenCart    (not built yet)
 | `salux` | Салюкс | Distributor price XLSX, four price tiers | `import_salux.py` |
 | `crystal` | LED Crystal | Price XLS, one sheet per category | `import_crystal.py` |
 | `viasvet` | ViaSvet | Multi-sheet XLSX; stock shown as cell colour | `import_viasvet.py` |
+| `maytoni` | Maytoni | The brand's own price list, with barcodes and photographs | `import_maytoni.py` |
+| `tochka_zreniya` | Точка Зрения | Hand-kept XLSX; two names per product | `import_tochka_zreniya.py` |
 
 Svetoyar's own articles and names for Salux-made goods are not a supplier feed;
 they are loaded into `own_articles` by `import_own_articles.py`.
@@ -199,7 +201,7 @@ docs/                  pricing, certificates, supplier permissions
 
 Done:
 
-- Imports for all seven suppliers.
+- Imports for all nine suppliers.
 - Markup rules.
 - Stock tracking.
 - Certificates and registry links.
@@ -217,11 +219,15 @@ Not built yet:
   file; whether to read it in depends on which side owns the catalogue, which
   the client has not decided.
 - **OpenCart export.** Needs the site access to build against.
-- **Images are hotlinks.** All 459,134 `product_images.stored_path` are empty -
-  nothing has been downloaded, so the catalogue's pictures depend on the
-  suppliers' own servers.
+- **Images are half downloaded.** 138,025 of 608,408 are stored locally. The
+  gap is almost all Декомо (101,669 of 502,618) and Арлайт, whose 69,179 need a
+  dealer login the client has not sent. Everything else is complete.
 - **Orders.** No orders or customers tables; `type=sale` is refused.
-- **Retired products.** What happens to products a supplier stops listing
-  (hide them automatically, or flag them for a manager) is still undecided.
+- **Retired products.** 7,131 site products have no supplier price behind them.
+  The client releases them brand by brand: 952 are queued to be hidden
+  (`hide_discontinued.py`), Арлайт and Jazzway are still being read, and 123
+  brands have had no decision. Nothing is hidden automatically.
 - **Salux mapping.** Our own articles are not yet applied to Salux products,
-  because some markings match more than one product.
+  because some markings match more than one product. `own_article_report.py`
+  prepares the 470 that are safe; see [articles.md](docs/articles.md), which is
+  required reading before touching an article anywhere.
