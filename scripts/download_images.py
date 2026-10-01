@@ -54,19 +54,62 @@ from staging.db import db_session, fetch_all, fetch_one
 
 # Some hosts serve a dealer's files only to a logged-in session. Arlight's CDN
 # (assets.transistor.ru) 403s without both the session cookie and a referer from
-# its own price page, so those travel with every request to that host. The
-# session is captured by hand from the browser into config.env; when it is not
-# set, the host is fetched like any other and simply returns 403.
+# its own price page, so those travel with every request to that host. Arlight
+# confirmed (ticket 280901) this is the only way - there is no archive or token,
+# the backend must authorise and download with the session.
+#
+# The login itself cannot be scripted from our server: a WAF blocks the POST from
+# our IP, and the form is captcha-gated, so the cookie is still captured by hand
+# from a browser into config.env. But the session need only be fetched once: each
+# file response re-issues the auth cookie with a fresh two-hour life, so as long
+# as the run keeps hitting the host we follow that rolling cookie and the one
+# login lasts the whole download. _SESSION_HOSTS holds the live cookie jar.
+_SESSION_HOSTS: dict[str, dict[str, str]] = {}
+_session_lock = threading.Lock()
+
+
+def _parse_cookie_pairs(blob: str) -> dict[str, str]:
+    """name=value pairs from a Cookie header or a single Set-Cookie line."""
+    pairs = {}
+    for part in blob.split(";"):
+        if "=" in part:
+            name, _, value = part.strip().partition("=")
+            if name and name.lower() not in ("expires", "max-age", "path", "domain", "samesite"):
+                pairs[name] = value
+    return pairs
+
+
 HOST_HEADERS: dict[str, dict[str, str]] = {}
 if os.getenv("ARLIGHT_COOKIE"):
+    _SESSION_HOSTS["assets.transistor.ru"] = _parse_cookie_pairs(os.environ["ARLIGHT_COOKIE"])
     HOST_HEADERS["assets.transistor.ru"] = {
-        "Cookie": os.environ["ARLIGHT_COOKIE"],
         "Referer": os.getenv("ARLIGHT_REFERER", "https://assets.transistor.ru/"),
-        # This host checks the session against a browser-shaped request; its own
+        # This host checks the session against a browser-shaped request; our own
         # bot UA is fine everywhere else but is refused here.
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                       "(KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
     }
+
+
+def _session_cookie(host: str) -> str | None:
+    with _session_lock:
+        jar = _SESSION_HOSTS.get(host)
+        return "; ".join(f"{n}={v}" for n, v in jar.items()) if jar else None
+
+
+def _update_session(host: str, set_cookie_lines: list[str]) -> None:
+    """Follow the host's rolling session: fold each Set-Cookie back into the jar
+    so the next request carries the freshest token. A cookie deleted by the
+    server (Max-Age=0) is left as is - dropping it loses a still-valid sibling."""
+    if host not in _SESSION_HOSTS or not set_cookie_lines:
+        return
+    with _session_lock:
+        for line in set_cookie_lines:
+            first = line.split(";", 1)[0]
+            name, _, value = first.partition("=")
+            name = name.strip()
+            if name and value not in ("", "deleted"):
+                _SESSION_HOSTS[host][name] = value
 
 IMAGES_DIR = Path(r"D:\projects\1C\images")
 MAX_SIDE = 1600
@@ -116,9 +159,14 @@ def fetch(url: str) -> bytes:
             _host_last[host] = time.monotonic()
         try:
             headers = {"User-Agent": USER_AGENT, **HOST_HEADERS.get(host, {})}
+            cookie = _session_cookie(host)
+            if cookie:
+                headers["Cookie"] = cookie
             request = urllib.request.Request(encode_url(url), headers=headers)
             with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
-                return response.read()
+                data = response.read()
+                _update_session(host, response.headers.get_all("Set-Cookie") or [])
+                return data
         except urllib.error.HTTPError as exc:
             if exc.code in (404, 403, 410) or attempt == RETRIES:
                 raise
