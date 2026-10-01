@@ -82,12 +82,22 @@ def _parse_cookie_pairs(blob: str) -> dict[str, str]:
 HOST_HEADERS: dict[str, dict[str, str]] = {}
 if os.getenv("ARLIGHT_COOKIE"):
     _SESSION_HOSTS["assets.transistor.ru"] = _parse_cookie_pairs(os.environ["ARLIGHT_COOKIE"])
+    # The WAF in front of this host wants a full browser-shaped request: referer,
+    # the sec-* hints and a matching user-agent. Drop any of them and it answers
+    # 403 even with a valid session, so the whole set the browser sent travels
+    # with each request.
     HOST_HEADERS["assets.transistor.ru"] = {
         "Referer": os.getenv("ARLIGHT_REFERER", "https://assets.transistor.ru/"),
-        # This host checks the session against a browser-shaped request; our own
-        # bot UA is fine everywhere else but is refused here.
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                      "(KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
+        "sec-ch-ua": '"Chromium";v="154", "Google Chrome";v="154", "Not A(Brand";v="99"',
+        "sec-ch-ua-mobile": "?1",
+        "sec-ch-ua-platform": '"Android"',
+        "Sec-Fetch-Dest": "image",
+        "Sec-Fetch-Mode": "no-cors",
+        "Sec-Fetch-Site": "same-origin",
+        "User-Agent": "Mozilla/5.0 (Linux; Android 16; Pixel 10) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36",
     }
 
 
