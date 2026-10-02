@@ -41,6 +41,14 @@ DEFAULT_UNIT = ("796", "шт", "Штука")
 # neither does anything still waiting for review.
 PUBLISHABLE_STATUSES = ("approved", "synced_1c", "published")
 
+# Brands the client asked to keep off the new site (Анна, 02.10.2026). They are
+# excluded from the export whatever their status, so no approval or import can put
+# them back. Matched case-insensitively as a whole word, so "Apeyron" also covers
+# "Apeyron Electrics" and "Apeyron clock" while a longer unrelated name would not
+# be caught by accident.
+EXCLUDED_BRANDS = ("Aledus", "Apeyron", "Armator", "Aployt", "ArtClassic", "iLamp")
+_EXCLUDED_BRANDS_RE = "|".join(brand.lower() for brand in EXCLUDED_BRANDS)
+
 CATEGORY_SQL = """
     SELECT c.id, c.parent_id, c.name, c.slug, c.onec_guid, c.sort_order
     FROM categories c
@@ -63,6 +71,7 @@ PRODUCT_SQL = f"""
     LEFT JOIN suppliers s ON s.id = p.primary_supplier_id
     WHERE p.status IN ({', '.join(['%s'] * len(PUBLISHABLE_STATUSES))})
       AND p.onec_guid IS NOT NULL
+      AND (p.brand IS NULL OR LOWER(p.brand) NOT REGEXP %s)
     ORDER BY p.id
 """
 
@@ -279,7 +288,7 @@ def _write(root: ET.Element, path: Path) -> Path:
 
 def load_products(conn: Connection, limit: int | None = None) -> list[dict[str, Any]]:
     sql = PRODUCT_SQL + (f" LIMIT {int(limit)}" if limit else "")
-    return fetch_all(conn, sql, PUBLISHABLE_STATUSES)
+    return fetch_all(conn, sql, (*PUBLISHABLE_STATUSES, _EXCLUDED_BRANDS_RE))
 
 
 def load_images(conn: Connection, product_ids: Iterable[int]) -> dict[int, list[str]]:
