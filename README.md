@@ -212,6 +212,13 @@ Done:
 - Category tree, and every product placed in it.
 - Slugs and 1C GUIDs for the whole catalogue.
 - CommerceML export and the exchange endpoint 1C connects to.
+- Descriptions for 99% of the catalogue. Dekomo ships one for 11% of its
+  range and four suppliers ship none, so `generate_descriptions.py` composes
+  one from each product's attributes (marked `description_source='generated'`,
+  reversible with `--clear`).
+- Arlight images and certificates, taken from the dealer portal
+  (assets.transistor.ru) once the client logged in: 68,284 photos and 377
+  documents with their registry cards.
 
 Not built yet:
 
@@ -219,14 +226,17 @@ Not built yet:
   file; whether to read it in depends on which side owns the catalogue, which
   the client has not decided.
 - **OpenCart export.** Needs the site access to build against.
-- **Images are half downloaded.** 138,025 of 608,408 are stored locally. The
-  gap is almost all Декомо (101,669 of 502,618) and Арлайт, whose 69,179 need a
-  dealer login the client has not sent. Everything else is complete.
+- **Images, the long tail.** 207,000 of 608,408 are stored locally. Arlight is
+  done (68,284; the ~900 missing are 404s on Arlight's own CDN) and every small
+  supplier is complete. What remains is Декомо - ~400,000 URLs that download at
+  about one a second, so it runs for days in the background.
 - **Orders.** No orders or customers tables; `type=sale` is refused.
 - **Retired products.** 7,131 site products have no supplier price behind them.
-  The client releases them brand by brand: 952 are queued to be hidden
-  (`hide_discontinued.py`), Арлайт and Jazzway are still being read, and 123
-  brands have had no decision. Nothing is hidden automatically.
+  The client marked the final file by hand - green to keep, red to hide - and
+  3,795 are now queued to hide (red, plus 6063 and the discontinued SWG
+  articles); the green and the still-uncoloured brands stay. Six brands are also
+  kept off the new site entirely, in the export query. Nothing is hidden
+  automatically, and nothing is live until the exchange runs.
 - **Salux mapping.** Our own articles are not yet applied to Salux products,
   because some markings match more than one product. `own_article_report.py`
   prepares the 470 that are safe; see [articles.md](docs/articles.md), which is
