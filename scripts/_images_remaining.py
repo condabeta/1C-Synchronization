@@ -27,5 +27,5 @@ with db_session() as conn:
         (supplier,),
     )[0]["n"]
 
-print(f"{supplier}: осталось адресов {remaining:,}")
+print(f"{supplier}: {remaining} image URLs remaining")
 sys.exit(1 if remaining > 0 else 0)
