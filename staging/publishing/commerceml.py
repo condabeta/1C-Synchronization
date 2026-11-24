@@ -48,9 +48,30 @@ PUBLISHABLE_STATUSES = ("approved", "synced_1c", "published")
 # them back. Matched case-insensitively as a whole word, so "Apeyron" also covers
 # "Apeyron Electrics" and "Apeyron clock" while a longer unrelated name would not
 # be caught by accident.
-# LED Crystal is held back until it replaces its expired certificate (Анна, 02.11.2026).
-EXCLUDED_BRANDS = ("Aledus", "Apeyron", "Armator", "Aployt", "ArtClassic", "iLamp", "LED Crystal")
+EXCLUDED_BRANDS = ("Aledus", "Apeyron", "Armator", "Aployt", "ArtClassic", "iLamp")
 _EXCLUDED_BRANDS_RE = "|".join(brand.lower() for brand in EXCLUDED_BRANDS)
+
+# The site carries only its own manufacturers (svetoyar.pro/brands/), plus the three
+# the client added on 05.11.2026. Maytoni ships under several sub-brand names.
+# Salux and LED Crystal goods are kept by supplier, their brand names vary.
+SITE_BRANDS_RE = (
+    "^(arlight|arte lamp|citilux|denkirs|eurosvet|favourite|feron|freya|fumagalli|jazzway"
+    "|kink light|led crystal|lightstar|loft it|mantra|maytoni.*|novotech|odeon light"
+    "|st-luce|st luce|uniel|vele luce|vitaluce|volpe|voltum|werkel|viasvet"
+    "|ambrella light|elektrostandard|voltega)$"
+)
+SITE_SUPPLIERS = ("salux", "crystal", "viasvet")
+
+# SWG has no certificate for any product, and goods without a current certificate are
+# not shown (Анна, 24.11.2026). Kept out by supplier, since its sub-brand names vary;
+# its brand names are also gone from SITE_BRANDS_RE above.
+EXCLUDED_SUPPLIERS = ("swg",)
+
+# LED Crystal goes out only as tape, profile, dimmers and sensors (client, 05.11.2026).
+# Controllers share the LC prefix with dimmers, so those are named one by one; the
+# whole LS series is what the supplier's declaration calls sensors.
+CRYSTAL_SHEETS = ("СВЕТОДИОДНЫЕ ЛЕНТЫ", "АЛЮМИНИЕВЫЕ ПРОФИЛИ")
+CRYSTAL_SKU_RE = "^(LC29|LC4[0-3](-RF)?|LS)"
 
 CATEGORY_SQL = """
     SELECT c.id, c.parent_id, c.name, c.slug, c.onec_guid, c.sort_order
@@ -75,6 +96,14 @@ PRODUCT_SQL = f"""
     WHERE p.status IN ({', '.join(['%s'] * len(PUBLISHABLE_STATUSES))})
       AND p.onec_guid IS NOT NULL
       AND (p.brand IS NULL OR LOWER(p.brand) NOT REGEXP %s)
+      AND (s.code IS NULL OR s.code <> 'crystal'
+           OR sp.supplier_category IN ({', '.join(repr(sheet) for sheet in CRYSTAL_SHEETS)})
+           OR sp.supplier_sku REGEXP '{CRYSTAL_SKU_RE}')
+      AND (s.code IS NULL OR s.code NOT IN ({', '.join(repr(code) for code in EXCLUDED_SUPPLIERS)}))
+      AND (LOWER(p.brand) REGEXP '{SITE_BRANDS_RE}'
+           OR s.code IN ({', '.join(repr(code) for code in SITE_SUPPLIERS)}))
+      -- Arlight's sample pieces are not goods for the shop (client, 05.11.2026).
+      AND (s.code IS NULL OR s.code <> 'arlight' OR LOWER(p.name) NOT LIKE '%%образец%%')
     ORDER BY p.id
 """
 
