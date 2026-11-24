@@ -530,6 +530,65 @@ CRYSTAL_REPLACEMENT = Certificate(
     ),
 )
 
+# Sent by the client on 05.11.2026 as PDFs, read from the scans themselves. The
+# power supply declaration covers serial production, so unlike CRY-08 it does not
+# run out with a batch. The client's table links its PDFs to a private chatgpt.com
+# library, so no scan_url is taken from it.
+CRYSTAL_2031 = [
+    Certificate(
+        code="CRY-09",
+        doc_kind="declaration",
+        doc_kind_label="Декларация о соответствии ЕАЭС",
+        doc_number="ЕАЭС N RU Д-CN.РА09.В.84175/26",
+        scope_text="Источники питания для светодиодной продукции; серии (типы) LB, LT; ТМ LED CRYSTAL. Серийный выпуск.",
+        regulation="ТР ТС 004/2011; ТР ТС 020/2011",
+        valid_from=date(2026, 10, 22),
+        valid_to=date(2031, 10, 20),
+        registry_url="https://pub.fsa.gov.ru/rds/declaration/view/22061097",
+        other_url=None,
+        scan_url=None,
+        link_status="official",
+        source="PDF от клиента, 05.11.2026",
+        notes="Заменяет декларацию на партию CRY-08. Карточка в реестре ФСА не проверена.",
+    ),
+    Certificate(
+        code="CRY-10",
+        doc_kind="declaration",
+        doc_kind_label="Декларация о соответствии ЕАЭС",
+        doc_number="ЕАЭС N RU Д-CN.РА09.В.84023/26",
+        scope_text=(
+            "Переключатели, выключатели, димеры, контроллеры, электронные датчики движения "
+            "и прикосновения; серии LS, LC; ТМ LED CRYSTAL. Серийный выпуск."
+        ),
+        regulation="ТР ТС 020/2011",
+        valid_from=date(2026, 10, 22),
+        valid_to=date(2031, 10, 20),
+        registry_url="https://pub.fsa.gov.ru/rds/declaration/view/22060914",
+        other_url=None,
+        scan_url=None,
+        link_status="official",
+        source="PDF от клиента, 05.11.2026",
+        notes="Карточка в реестре ФСА не проверена.",
+    ),
+    Certificate(
+        code="CRY-11",
+        doc_kind="voluntary",
+        doc_kind_label="Добровольный сертификат соответствия, система «Альянс-Тест»",
+        doc_number="РОСС RU.32671.04АЛЯ0ОС009.С00537",
+        scope_text="Светодиодные ленты, соединители, светодиодные модули, гирлянды; серии L, LR, LM, G; ТМ LED CRYSTAL.",
+        regulation="ГОСТ IEC 60598-1-2017",
+        valid_from=date(2026, 10, 22),
+        valid_to=date(2031, 10, 21),
+        registry_url=None,
+        other_url=None,
+        scan_url=None,
+        link_status="not_required",
+        source="PDF от клиента, 05.11.2026",
+        notes="Добровольный сертификат, в реестре ФСА карточки нет.",
+    ),
+]
+
+
 
 def load_crystal(path: str = CRYSTAL_REGISTRY) -> list[Certificate]:
     certificates = []
@@ -558,6 +617,7 @@ def load_crystal(path: str = CRYSTAL_REGISTRY) -> list[Certificate]:
             )
         )
     certificates.append(CRYSTAL_REPLACEMENT)
+    certificates.extend(CRYSTAL_2031)
     return certificates
 
 
@@ -1019,6 +1079,7 @@ SCOPE_RULES: dict[str, list[Any]] = {
     "crystal": [
         # Tape and profile share the LR prefix; the price list sheet separates them.
         ScopeRule("CRY-01", "LR", category_contains="светодиодные лент"),
+        ScopeRule("CRY-11", "LR", category_contains="светодиодные лент"),
         ScopeRule("CRY-03", "L", category_contains="профил"),
         # Profile components - connectors, end caps, holders. Their articles start
         # with L, LR or R, but every one names the L-series profile it fits, and the
@@ -1030,12 +1091,16 @@ SCOPE_RULES: dict[str, list[Any]] = {
         ScopeRule("CRY-02", "LT", category_contains="источники питания"),
         ScopeRule("CRY-08", "LB", category_contains="источники питания"),
         ScopeRule("CRY-08", "LT", category_contains="источники питания"),
+        ScopeRule("CRY-09", "LB", category_contains="источники питания"),
+        ScopeRule("CRY-09", "LT", category_contains="источники питания"),
         # LC is luminaires on one sheet and controllers on another; the HV models
         # have their own certificate.
         ScopeRule("CRY-04", "LC", category_contains="светильник", sku_excludes="HV"),
         ScopeRule("CRY-05", "LC", category_contains="светильник", sku_contains="HV"),
         ScopeRule("CRY-06", "LC", category_contains="управлени"),
+        ScopeRule("CRY-10", "LC", category_contains="управлени"),
         ScopeRule("CRY-07", "LS"),
+        ScopeRule("CRY-10", "LS"),
     ],
     "salux": [
         *_series("SAL-01", "ССдВз 1Ех", "01", "02 db", "03"),
