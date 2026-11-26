@@ -10,7 +10,9 @@ turning the catalogue into the files 1C reads:
 * `offers.xml` - «ПакетПредложений» (price types, prices, stock).
 
 Both are built from `products` and `categories`, for products that have passed
-moderation. Everything is identified by «Ид», the GUID stored on the row: 1C
+moderation. Descriptions and photographs stay out: the client does not want them
+swelling the 1C base (Павел, 28.10.2026), so they go from here to the site directly.
+Everything is identified by «Ид», the GUID stored on the row: 1C
 keys its own records on it, so a product that arrives with a new GUID becomes a
 second product in 1C rather than an update of the first.
 
@@ -28,7 +30,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from pymysql.connections import Connection
 
@@ -49,6 +51,28 @@ PUBLISHABLE_STATUSES = ("approved", "synced_1c", "published")
 EXCLUDED_BRANDS = ("Aledus", "Apeyron", "Armator", "Aployt", "ArtClassic", "iLamp")
 _EXCLUDED_BRANDS_RE = "|".join(brand.lower() for brand in EXCLUDED_BRANDS)
 
+# The site carries only its own manufacturers (svetoyar.pro/brands/), plus the three
+# the client added on 05.11.2026. Maytoni ships under several sub-brand names.
+# Salux and LED Crystal goods are kept by supplier, their brand names vary.
+SITE_BRANDS_RE = (
+    "^(arlight|arte lamp|citilux|denkirs|eurosvet|favourite|feron|freya|fumagalli|jazzway"
+    "|kink light|led crystal|lightstar|loft it|mantra|maytoni.*|novotech|odeon light"
+    "|st-luce|st luce|uniel|vele luce|vitaluce|volpe|voltum|werkel|viasvet"
+    "|ambrella light|elektrostandard|voltega)$"
+)
+SITE_SUPPLIERS = ("salux", "crystal", "viasvet")
+
+# SWG has no certificate for any product, and goods without a current certificate are
+# not shown (Анна, 24.11.2026). Kept out by supplier, since its sub-brand names vary;
+# its brand names are also gone from SITE_BRANDS_RE above.
+EXCLUDED_SUPPLIERS = ("swg",)
+
+# LED Crystal goes out only as tape, profile, dimmers and sensors (client, 05.11.2026).
+# Controllers share the LC prefix with dimmers, so those are named one by one; the
+# whole LS series is what the supplier's declaration calls sensors.
+CRYSTAL_SHEETS = ("СВЕТОДИОДНЫЕ ЛЕНТЫ", "АЛЮМИНИЕВЫЕ ПРОФИЛИ")
+CRYSTAL_SKU_RE = "^(LC29|LC4[0-3](-RF)?|LS)"
+
 CATEGORY_SQL = """
     SELECT c.id, c.parent_id, c.name, c.slug, c.onec_guid, c.sort_order
     FROM categories c
@@ -57,7 +81,7 @@ CATEGORY_SQL = """
 """
 
 PRODUCT_SQL = f"""
-    SELECT p.id, p.internal_sku, p.onec_guid, p.onec_code, p.name, p.brand, p.description,
+    SELECT p.id, p.internal_sku, p.onec_guid, p.onec_code, p.name, p.brand,
            p.barcode, p.unit, p.okei_code, p.weight, p.vat_rate, p.category_id,
            p.price, p.price_retail, p.stock_qty, p.is_available, p.slug,
            c.onec_guid AS category_guid,
@@ -72,16 +96,16 @@ PRODUCT_SQL = f"""
     WHERE p.status IN ({', '.join(['%s'] * len(PUBLISHABLE_STATUSES))})
       AND p.onec_guid IS NOT NULL
       AND (p.brand IS NULL OR LOWER(p.brand) NOT REGEXP %s)
+      AND (s.code IS NULL OR s.code <> 'crystal'
+           OR sp.supplier_category IN ({', '.join(repr(sheet) for sheet in CRYSTAL_SHEETS)})
+           OR sp.supplier_sku REGEXP '{CRYSTAL_SKU_RE}')
+      AND (s.code IS NULL OR s.code NOT IN ({', '.join(repr(code) for code in EXCLUDED_SUPPLIERS)}))
+      AND (LOWER(p.brand) REGEXP '{SITE_BRANDS_RE}'
+           OR s.code IN ({', '.join(repr(code) for code in SITE_SUPPLIERS)}))
+      -- Arlight's sample pieces are not goods for the shop (client, 05.11.2026).
+      AND (s.code IS NULL OR s.code <> 'arlight' OR LOWER(p.name) NOT LIKE '%%образец%%')
     ORDER BY p.id
 """
-
-IMAGE_SQL = """
-    SELECT product_id, source_path, image_type
-    FROM product_images
-    WHERE product_id IN ({placeholders})
-    ORDER BY product_id, image_type = 'main' DESC, sort_order
-"""
-
 
 @dataclass
 class ExportStats:
@@ -150,7 +174,7 @@ def build_classifier(classifier_guid: str, categories: list[dict[str, Any]]) -> 
     return classifier
 
 
-def _product_node(parent: ET.Element, row: dict[str, Any], images: list[str]) -> None:
+def _product_node(parent: ET.Element, row: dict[str, Any]) -> None:
     node = _sub(parent, "Товар")
     _sub(node, "Ид", row["onec_guid"])
     _sub(node, "Артикул", row["onec_code"] or row["internal_sku"])
@@ -160,17 +184,12 @@ def _product_node(parent: ET.Element, row: dict[str, Any], images: list[str]) ->
         groups = _sub(node, "Группы")
         _sub(groups, "Ид", row["category_guid"])
 
-    if row["description"]:
-        _sub(node, "Описание", row["description"])
     if row["barcode"]:
         _sub(node, "Штрихкод", row["barcode"])
 
     unit = _sub(node, "БазоваяЕдиница", row["unit"] or DEFAULT_UNIT[1])
     unit.set("Код", row["okei_code"] or DEFAULT_UNIT[0])
     unit.set("НаименованиеПолное", DEFAULT_UNIT[2])
-
-    for image in images[:10]:  # 1C ignores the rest; keep the payload sane
-        _sub(node, "Картинка", image)
 
     details = _sub(node, "ЗначенияРеквизитов")
     # Салюкс is the case that made this necessary: in 1C the article is ours
@@ -199,7 +218,6 @@ def build_catalog(
     catalog_guid: str,
     classifier_guid: str,
     products: list[dict[str, Any]],
-    images: dict[int, list[str]],
 ) -> ET.Element:
     catalog = ET.Element("Каталог")
     catalog.set("СодержитТолькоИзменения", "false")
@@ -208,7 +226,7 @@ def build_catalog(
     _sub(catalog, "Наименование", "Каталог товаров Светояр")
     container = _sub(catalog, "Товары")
     for row in products:
-        _product_node(container, row, images.get(row["id"], []))
+        _product_node(container, row)
     return catalog
 
 
@@ -291,24 +309,6 @@ def load_products(conn: Connection, limit: int | None = None) -> list[dict[str, 
     return fetch_all(conn, sql, (*PUBLISHABLE_STATUSES, _EXCLUDED_BRANDS_RE))
 
 
-def load_images(conn: Connection, product_ids: Iterable[int]) -> dict[int, list[str]]:
-    ids = list(product_ids)
-    if not ids:
-        return {}
-    images: dict[int, list[str]] = {}
-    chunk = 5000
-    for start in range(0, len(ids), chunk):
-        part = ids[start : start + chunk]
-        rows = fetch_all(
-            conn,
-            IMAGE_SQL.format(placeholders=", ".join(["%s"] * len(part))),
-            part,
-        )
-        for row in rows:
-            images.setdefault(row["product_id"], []).append(row["source_path"])
-    return images
-
-
 def export(conn: Connection, out_dir: Path, *, limit: int | None = None) -> ExportStats:
     """Write import.xml and offers.xml. Returns what went into them."""
     stats = ExportStats()
@@ -330,13 +330,12 @@ def export(conn: Connection, out_dir: Path, *, limit: int | None = None) -> Expo
     price_types = fetch_all(
         conn, "SELECT code, name, onec_guid, source_field, currency FROM price_types WHERE is_active = 1"
     )
-    images = load_images(conn, (row["id"] for row in products))
 
     classifier_guid, catalog_guid = CLASSIFIER_GUID, CATALOG_GUID
 
     root = _root(tag_date, tag_time)
     root.append(build_classifier(classifier_guid, categories))
-    root.append(build_catalog(catalog_guid, classifier_guid, products, images))
+    root.append(build_catalog(catalog_guid, classifier_guid, products))
     stats.files.append(_write(root, out_dir / "import.xml"))
 
     offers_root = _root(tag_date, tag_time)
